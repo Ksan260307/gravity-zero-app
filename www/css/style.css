@@ -63,7 +63,9 @@ canvas {
     box-shadow: 0 4px 15px rgba(0, 170, 255, 0.15);
     backdrop-filter: blur(4px);
     pointer-events: auto;
-    max-width: 230px;
+    /* モード名(STANDARD/HEAVY)+ DEF/ROF/PWR の3チップが1行に収まる幅 */
+    width: max-content;
+    max-width: 300px;
 }
 
 /* モード名と個性ラベルを1行にまとめる */
@@ -205,6 +207,42 @@ canvas {
     height: 100%;
     background: #f6f;
     border-radius: 2px;
+}
+
+/* ブーストエネルギーのゲージ */
+.gauge-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.gauge-label {
+    font-size: 9px;
+    color: #9ab;
+    letter-spacing: 1px;
+    min-width: 36px;
+}
+
+#boost-bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+#boost-fill {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, #06f, #0cf);
+    border-radius: 2px;
+    transition: width 0.08s linear;
+}
+
+/* 残量が少ないときは赤系にして枯渇を知らせる */
+#boost-fill.boost-low {
+    background: linear-gradient(90deg, #f43, #fa4);
 }
 
 /* ---------- 操作ガイド(PC用) ---------- */
@@ -378,9 +416,139 @@ canvas {
     box-shadow: 0 0 25px rgba(0, 255, 255, 0.6);
 }
 
+/* ヘルプは内容が縦に長いので、中央寄せではなく上から並べる
+   (flexの中央寄せ+スクロールだと上部が見切れるため) */
+#help-overlay {
+    justify-content: flex-start;
+}
+
 #gameover-overlay {
     background: rgba(20, 0, 5, 0.88);
 }
+
+/* ---------- チャレンジ開始ボタン・レベル選択 ---------- */
+.start-btn-sub {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    font-size: 14px;
+    padding: 10px 28px;
+    color: #f6a;
+    border-color: #f6a;
+    box-shadow: 0 0 12px rgba(255, 102, 170, 0.25);
+}
+
+.start-btn-sub:hover {
+    background: rgba(255, 102, 170, 0.15);
+    box-shadow: 0 0 20px rgba(255, 102, 170, 0.5);
+}
+
+.start-btn-sub small {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: #c8a0b8;
+}
+
+.level-select {
+    font-size: 12px;
+    color: #9df;
+    letter-spacing: 2px;
+    border: 1px solid rgba(0, 170, 255, 0.4);
+    border-radius: 14px;
+    padding: 5px 16px;
+    cursor: pointer;
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.level-select:hover { background: rgba(0, 170, 255, 0.15); }
+
+.level-select b { color: #fff; }
+
+/* ---------- チャレンジモードの残り時間 ---------- */
+#challenge-time {
+    position: absolute;
+    top: 22px;
+    right: 70px;
+    font-size: 18px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #ffcc55;
+    text-shadow: 0 0 10px rgba(255, 170, 0, 0.6);
+    z-index: 900;
+    pointer-events: none;
+}
+
+/* ---------- ランキング ---------- */
+#ranking-box {
+    background: rgba(10, 20, 40, 0.6);
+    border: 1px solid rgba(0, 170, 255, 0.35);
+    border-radius: 10px;
+    padding: 12px 26px;
+    text-align: center;
+}
+
+.rank-title {
+    font-size: 11px;
+    color: #7fd0ff;
+    letter-spacing: 3px;
+    margin-bottom: 6px;
+}
+
+#ranking-list {
+    margin: 0;
+    padding-left: 20px;
+    text-align: left;
+    font-size: 14px;
+    color: #cde;
+    line-height: 1.7;
+}
+
+#ranking-list .rank-new {
+    color: #ffcc55;
+    font-weight: bold;
+    text-shadow: 0 0 8px rgba(255, 170, 0, 0.5);
+}
+
+/* ---------- デバッグパネル ---------- */
+#debug-panel {
+    position: absolute;
+    left: 16px;
+    bottom: 64px;
+    z-index: 960;
+    background: rgba(10, 5, 0, 0.8);
+    border: 1px solid #f80;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    color: #fc8;
+    pointer-events: auto;
+    display: none;
+}
+
+#debug-panel .debug-btns {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 220px;
+}
+
+#debug-panel button {
+    background: rgba(255, 136, 0, 0.12);
+    border: 1px solid rgba(255, 136, 0, 0.6);
+    color: #fc8;
+    font-family: inherit;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+#debug-panel button:hover { background: rgba(255, 136, 0, 0.3); }
 
 /* ---------- タイトル画面の簡潔ヒント ---------- */
 .quick-hints {

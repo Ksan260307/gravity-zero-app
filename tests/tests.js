@@ -59,6 +59,7 @@ function runAll() {
         const e = g.enemies.get();
         e.id = ++g.enemyIdCounter;
         e.size = size; e.hp = hp; e.locked = false;
+        e.kind = 'rush'; // プール再利用で前の種類が残らないようにする
         e.mesh.position.set(x, y, z); e.vel.set(0, 0, 0);
         e.mesh.scale.setScalar(size); e.mesh.visible = true;
         e.mesh.material = g.enemyMats[0]; e.colorHex = '#ff3366';
@@ -98,6 +99,9 @@ function runAll() {
         check('ボス・キー設定のメソッドが存在する',
             typeof g.spawnBoss === 'function' && typeof g.damageBoss === 'function' &&
             typeof g.setKeyBinding === 'function' && typeof g.resetKeyBindings === 'function');
+        check('デバッグ・ランキング・敵生成のメソッドが存在する',
+            typeof g.toggleDebug === 'function' && typeof g.saveScoreToRanking === 'function' &&
+            typeof g.spawnEnemyUnit === 'function' && typeof g.backToTitle === 'function');
     });
 
     // =========================================================
@@ -387,7 +391,7 @@ function runAll() {
         g.equipSubWeapon('comet');
         g.equipSubWeapon('missile');
         check('新しいサブ武器で上書きされる', g.player.subWeapon === 'missile');
-        check('HUDのサブ武器名が更新される', document.getElementById('sub-name').innerText === 'ホーミングミサイル');
+        check('HUDのサブ武器名が更新される', document.getElementById('sub-name').innerText === 'HOMING MISSILE');
     });
 
     // =========================================================
@@ -592,7 +596,7 @@ function runAll() {
         g.addScore(250);
         check('スコア表示が更新される', document.getElementById('score-display').innerText === '250');
         g.equipSubWeapon('comet');
-        check('サブ武器名が更新される', document.getElementById('sub-name').innerText === 'コメット');
+        check('サブ武器名が更新される', document.getElementById('sub-name').innerText === 'COMET');
         setMode(1); g.hp = 100; g.player.hitInvincible = 0;
         g.damagePlayer(50);
         check('HPバー幅が減る', parseFloat(document.getElementById('hp-fill').style.width) < 100,
@@ -602,9 +606,9 @@ function runAll() {
             `w=${document.getElementById('hp-fill').style.width}`);
 
         setMode(2);
-        check('重装は防御ラベルが「強」', document.getElementById('trait-def').innerText === '強');
-        check('重装は火力ラベルが「高」', document.getElementById('trait-pow').innerText === '高');
-        check('重装は連射ラベルが「遅」', document.getElementById('trait-fire').innerText === '遅');
+        check('重装は防御ラベルが HIGH', document.getElementById('trait-def').innerText === 'HIGH');
+        check('重装は火力ラベルが HIGH', document.getElementById('trait-pow').innerText === 'HIGH');
+        check('重装は連射ラベルが SLOW', document.getElementById('trait-fire').innerText === 'SLOW');
         check('強みラベルは good 配色', document.getElementById('trait-def').className.includes('trait-good'));
         check('弱みラベルは bad 配色', document.getElementById('trait-fire').className.includes('trait-bad'));
     });
@@ -628,6 +632,372 @@ function runAll() {
         g.refreshBestOnTitle();
         check('タイトルにベストスコアが表示される', document.getElementById('start-best').innerText === '1234');
         localStorage.removeItem(Z.storageKeys.best);
+    });
+
+    // =========================================================
+    group('ゼロシフト(旧: 瞬間移動)', () => {
+        check('移動距離が80へ延長されている', C.BLINK_DIST === 80, `dist=${C.BLINK_DIST}`);
+        g.reset();
+        g.input.x = 1; g.input.y = 0; g.input.blink = true;
+        const x0 = g.player.pos.x;
+        step(1);
+        check('ゼロシフトで一気に移動する', g.player.pos.x - x0 >= C.BLINK_DIST - 1,
+            `dx=${(g.player.pos.x - x0).toFixed(1)}`);
+        check('使用後はクールタイムに入る', g.player.blinkCooldown > 0);
+        g.input.x = 0;
+
+        const labels = Array.from(document.querySelectorAll('#keyconfig-rows .keyconfig-row span'))
+            .map(s => s.textContent).join('|');
+        check('キー設定の表記がゼロシフトに変わる', labels.includes('ゼロシフト'), labels);
+        check('モバイルボタンは ZERO SHIFT 表記', document.getElementById('btn-blink').textContent.includes('ZERO'));
+    });
+
+    // =========================================================
+    group('スタイリッシュUI(英語表記)', () => {
+        g.reset();
+        setMode(1);
+        check('モード名が英語表記(STANDARD)', document.getElementById('mode-display').innerText === 'STANDARD');
+        setMode(2);
+        check('重装は HEAVY と表示', document.getElementById('mode-display').innerText === 'HEAVY');
+        check('個性ラベルも英語(DEF=HIGH)', document.getElementById('trait-def').innerText === 'HIGH');
+        g.reset();
+        check('サブ武器の初期表示は NONE', document.getElementById('sub-name').innerText === 'NONE');
+        g.equipSubWeapon('missile');
+        check('サブ武器名も英語表記', document.getElementById('sub-name').innerText === 'HOMING MISSILE');
+        check('ボス警告も英語表記', document.getElementById('boss-label').textContent.includes('WARNING'));
+        check('操作説明(ヘルプ)は日本語のまま', document.querySelector('#help-overlay .guide-heading').textContent === '遊び方');
+        g.reset();
+    });
+
+    // =========================================================
+    group('デバッグモード', () => {
+        g.reset();
+        g.toggleDebug();
+        const panel = document.getElementById('debug-panel');
+        check('F2/APIでパネルが表示される', !!panel && panel.style.display !== 'none');
+
+        panel.querySelector('[data-dbg="god"]').click();
+        check('GODモードをONにできる', g.debugGod === true);
+        g.player.hitInvincible = 0;
+        g.damagePlayer(50);
+        check('GODモード中はダメージを受けない', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        panel.querySelector('[data-dbg="god"]').click();
+        check('GODモードをOFFに戻せる', g.debugGod === false);
+
+        const s0 = g.score;
+        panel.querySelector('[data-dbg="score"]').click();
+        check('スコアを加算できる', g.score === s0 + 1000, `score=${g.score}`);
+
+        panel.querySelector('[data-dbg="boss"]').click();
+        check('ボスを即時出現できる', g.boss.active === true);
+
+        g.toggleDebug();
+        check('もう一度押すと隠れる', panel.style.display === 'none');
+        g.reset();
+    });
+
+    // =========================================================
+    group('アイテムの取りやすさ(吸い寄せ+判定拡大)', () => {
+        g.reset(); setMode(1);
+        g.hp = 50; g.updateHpBar();
+        g.spawnItem({ x: 120, y: 0, z: 0 }, 'repair');
+        const item = g.items.pool.find(i => i.active);
+        item.vel.set(0, 0, 0);
+        step(60);
+        check('離れたアイテムが吸い寄せられて取れる', !item.active && g.hp === 80,
+            `hp=${g.hp} active=${item && item.active}`);
+
+        g.reset(); setMode(1);
+        g.hp = 50; g.updateHpBar();
+        g.spawnItem({ x: C.ITEM_PICKUP_RADIUS - 2, y: 0, z: 0 }, 'repair');
+        g.items.pool.find(i => i.active).vel.set(0, 0, 0);
+        step(1);
+        check('取得半径が広がっている(旧30 → 42)', g.hp === 80, `hp=${g.hp}`);
+    });
+
+    // =========================================================
+    group('ヘルプ画面のレイアウト', () => {
+        const jc = getComputedStyle(document.getElementById('help-overlay')).justifyContent;
+        check('上詰めレイアウトで上部が見切れない', jc === 'flex-start', `justify-content=${jc}`);
+    });
+
+    // =========================================================
+    group('ボス撃破演出(断末魔 → 大爆発)', () => {
+        g.reset();
+        g.addScore(C.BOSS_FIRST_SCORE);
+        step(1, true);
+        g.damageBoss(999999);
+        check('撃破直後は断末魔シーケンスに入る', g.boss.dying === true && g.boss.mesh.visible === true);
+        check('断末魔の間は攻撃・衝突の対象外', g.boss.active === false);
+
+        let frames = 0;
+        while (g.boss.dying && frames < 200) {
+            g.spawnTimer = 1e9;
+            g.update(1 / 60);
+            frames++;
+        }
+        check('約1.5秒(90フレーム)で爆散する', frames >= 85 && frames <= 100, `frames=${frames}`);
+        check('本体が消えて衝撃波リングが広がる',
+            !g.boss.mesh.visible && g.shockwaveLife > 0 && g.shockwave.visible);
+        check('大爆発で強い画面揺れが入る', g.shakeIntensity > 1.0, `shake=${g.shakeIntensity.toFixed(2)}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('敵タイプの多様化', () => {
+        // 蛇行型:左右へ大きく揺れながら接近する
+        g.reset();
+        const w = g.spawnEnemyUnit('weave');
+        w.mesh.position.set(0, 0, -400);
+        w.vel.set(0, 0, 0);
+        let minVx = Infinity, maxVx = -Infinity;
+        for (let i = 0; i < 140 && w.active; i++) {
+            g.spawnTimer = 1e9;
+            g.nextBossScore = Number.MAX_SAFE_INTEGER;
+            g.update(1 / 60);
+            minVx = Math.min(minVx, w.vel.x);
+            maxVx = Math.max(maxVx, w.vel.x);
+        }
+        check('蛇行型は左右へ大きく揺れる', minVx < -60 && maxVx > 60,
+            `vx=[${minVx.toFixed(0)}, ${maxVx.toFixed(0)}]`);
+
+        // 砲撃型:遠距離から自機を狙って撃つ
+        g.reset();
+        g.player.hitInvincible = 999;
+        const gn = g.spawnEnemyUnit('gunner');
+        gn.mesh.position.set(0, 0, -400);
+        gn.vel.set(0, 0, 0);
+        gn.fireTimer = 0.05;
+        for (let i = 0; i < 10; i++) {
+            g.spawnTimer = 1e9;
+            g.nextBossScore = Number.MAX_SAFE_INTEGER;
+            g.update(1 / 60);
+        }
+        check('砲撃型は弾を撃つ', countActive(g.enemyShots) >= 1, `shots=${countActive(g.enemyShots)}`);
+        let toward = false;
+        g.enemyShots.forEachActive(s => { if (s.vel.z > 100) toward = true; });
+        check('弾は自機の方向(+Z)へ飛ぶ', toward);
+
+        // 出現テーブル:レベル2以降は3タイプが混ざる
+        g.reset();
+        g.addScore(1650); // レベル2
+        const auto1 = withRandom(0.1, () => g.spawnEnemyUnit());
+        const auto2 = withRandom(0.4, () => g.spawnEnemyUnit());
+        const auto3 = withRandom(0.9, () => g.spawnEnemyUnit());
+        check('低乱数で砲撃型が出る(Lv2以降)', auto1.kind === 'gunner', `kind=${auto1.kind}`);
+        check('中乱数で蛇行型が出る', auto2.kind === 'weave', `kind=${auto2.kind}`);
+        check('高乱数で突撃型が出る', auto3.kind === 'rush', `kind=${auto3.kind}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('ランキング(ローカル上位5件)', () => {
+        localStorage.removeItem(Z.storageKeys.ranking);
+        g.gameMode = 'normal';
+        g.reset(); g.addScore(500); g.gameOver();
+        let arr = JSON.parse(localStorage.getItem(Z.storageKeys.ranking));
+        check('初回スコアが記録される', arr.length === 1 && arr[0] === 500, JSON.stringify(arr));
+        check('画面にランキングが表示される',
+            document.getElementById('ranking-box').style.display === 'block' &&
+            document.querySelectorAll('#ranking-list li').length === 1);
+
+        g.reset(); g.addScore(900); g.gameOver();
+        g.reset(); g.addScore(300); g.gameOver();
+        arr = JSON.parse(localStorage.getItem(Z.storageKeys.ranking));
+        check('降順で並ぶ', arr[0] === 900 && arr[1] === 500 && arr[2] === 300, JSON.stringify(arr));
+
+        [1200, 800, 700, 600].forEach(s => { g.reset(); g.addScore(s); g.gameOver(); });
+        arr = JSON.parse(localStorage.getItem(Z.storageKeys.ranking));
+        check('上位5件だけ保持する', arr.length === 5, `len=${arr.length}`);
+        check('最上位が維持される', arr[0] === 1200, JSON.stringify(arr));
+        check('今回のスコアが強調表示される', document.querySelector('#ranking-list .rank-new') !== null);
+
+        // チャレンジモードのスコアはランキング対象外
+        g.gameMode = 'challenge';
+        g.reset(); g.addScore(99999); g.gameOver();
+        arr = JSON.parse(localStorage.getItem(Z.storageKeys.ranking));
+        check('チャレンジのスコアは記録しない', !arr.includes(99999), JSON.stringify(arr));
+        g.gameMode = 'normal';
+        g.reset();
+    });
+
+    // =========================================================
+    group('チャレンジモード(無敵+2分スコアアタック)', () => {
+        g.gameMode = 'challenge';
+        g.reset();
+        check('制限時間120秒で開始する', approx(g.challengeTimeLeft, C.CHALLENGE_TIME, 0.01),
+            `t=${g.challengeTimeLeft}`);
+        check('残り時間が表示される', document.getElementById('challenge-time').style.display !== 'none');
+
+        g.player.hitInvincible = 0;
+        g.damagePlayer(25);
+        check('チャレンジ中は被弾しない(無敵)', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
+
+        step(60);
+        check('時間が経過で減る', g.challengeTimeLeft < C.CHALLENGE_TIME - 0.9,
+            `t=${g.challengeTimeLeft.toFixed(1)}`);
+
+        g.challengeTimeLeft = 0.02;
+        step(3);
+        check('時間切れで終了する', g.state === 'gameover', `state=${g.state}`);
+        check('見出しが TIME UP になる', document.getElementById('gameover-title').innerText === 'TIME UP');
+        check('チャレンジではランキングを表示しない', document.getElementById('ranking-box').style.display === 'none');
+        check('時間切れでは機体は爆散しない', g.player.group.visible === true);
+
+        g.gameMode = 'normal';
+        g.reset();
+        check('通常モードでは残り時間が消える', document.getElementById('challenge-time').style.display === 'none');
+    });
+
+    // =========================================================
+    group('開始レベル選択', () => {
+        g.setStartLevel(3);
+        g.reset();
+        check('開始レベル3で始まる', g.level === 3, `lv=${g.level}`);
+        check('HUDのレベル表示も3', document.getElementById('level-display').innerText === '3');
+        check('タイトルの表示が更新される', document.getElementById('start-level-val').innerText === '3');
+        g.addScore(C.SCORE_PER_LEVEL);
+        check('スコア加算で開始レベルから上がる', g.level === 4, `lv=${g.level}`);
+
+        g.cycleStartLevel(); // 3 → 5
+        check('選択は 1→3→5 で循環する', g.startLevel === 5);
+        g.cycleStartLevel(); // 5 → 1
+        check('5の次は1へ戻る', g.startLevel === 1);
+        g.reset();
+    });
+
+    // =========================================================
+    group('タイトルへ戻る', () => {
+        g.gameMode = 'normal';
+        g.reset();
+        g.gameOver();
+        document.getElementById('to-title').click();
+        check('タイトル画面に戻る', g.state === 'title' &&
+            document.getElementById('start-overlay').style.display === 'flex');
+        document.querySelector('#start-overlay .start-btn').click();
+        check('タイトルから再開できる', g.state === 'playing' &&
+            document.getElementById('start-overlay').style.display === 'none');
+    });
+
+    // =========================================================
+    group('ブースト(前方 / 方向ダッシュ)', () => {
+        // 方向キー+ブーストで、通常移動より明確に速く加速する
+        g.reset(); setMode(1);
+        g.player.boostEnergy = C.BOOST_MAX;
+        g.input.x = 1; g.input.y = 0; g.input.boost = false;
+        step(8);
+        const normalVx = g.player.vel.x;
+
+        g.reset(); setMode(1);
+        g.player.boostEnergy = C.BOOST_MAX;
+        g.input.x = 1; g.input.y = 0; g.input.boost = true;
+        step(8);
+        const boostVx = g.player.vel.x;
+        check('方向キー+ブーストで通常より高速に加速する', boostVx > normalVx * 1.5,
+            `normal=${normalVx.toFixed(0)} boost=${boostVx.toFixed(0)}`);
+        g.input.boost = false; g.input.x = 0;
+
+        // 方向キーなしのブーストは前方の流れ(星)を加速させる
+        g.reset();
+        g.jerkIntensity = 0;
+        const starPos = g.stars.geometry.attributes.position;
+        starPos.setZ(0, -100);
+        g.input.x = 0; g.input.y = 0; g.input.boost = false; g.player.boostEnergy = C.BOOST_MAX;
+        step(1);
+        const dNo = starPos.getZ(0) - (-100);
+
+        g.jerkIntensity = 0;
+        starPos.setZ(0, -100);
+        g.input.boost = true; g.player.boostEnergy = C.BOOST_MAX;
+        step(1);
+        const dBoost = starPos.getZ(0) - (-100);
+        check('方向キーなしでも前方の流れが速くなる(前方高速移動)', dBoost > dNo * 1.5,
+            `noboost=${dNo.toFixed(1)} boost=${dBoost.toFixed(1)}`);
+        g.input.boost = false;
+
+        // ブースト中は無敵(接触しても被弾しない)
+        g.reset(); setMode(1);
+        g.player.boostEnergy = C.BOOST_MAX;
+        g.input.boost = true;
+        spawnEnemy(0, 0, 0);
+        step(1);
+        check('ブースト中は接触しても被弾しない', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        g.input.boost = false;
+    });
+
+    // =========================================================
+    group('ブーストのエネルギー制', () => {
+        g.reset();
+        check('初期はエネルギー満タン', g.player.boostEnergy === C.BOOST_MAX, `e=${g.player.boostEnergy}`);
+
+        g.input.boost = true;
+        step(30); // 約0.5秒
+        const afterUse = g.player.boostEnergy;
+        check('ブースト中は消費する', afterUse < C.BOOST_MAX, `e=${afterUse.toFixed(1)}`);
+
+        g.input.boost = false;
+        step(60); // 約1秒回復
+        check('離すと回復する', g.player.boostEnergy > afterUse, `e=${g.player.boostEnergy.toFixed(1)}`);
+
+        // 使い切ったら発動できない
+        g.player.boostEnergy = 0;
+        g.input.boost = true;
+        step(1);
+        check('エネルギー切れではブーストしない', g.player.isBoosting === false);
+        g.input.boost = false;
+
+        // フル使用でも一定時間で枯渇する(無限ブースト無敵の防止)
+        g.reset();
+        g.input.boost = true;
+        let frames = 0;
+        step(1); frames++; // 1フレーム目でブースト開始(isBoostingが立つ)
+        check('押しっぱなしでブーストが始まる', g.player.isBoosting === true);
+        while (g.player.isBoosting && frames < 600) { step(1); frames++; }
+        check('押しっぱなしでも数秒で枯渇する', frames > 60 && frames < 200, `frames=${frames}`);
+        g.input.boost = false;
+        g.reset();
+    });
+
+    // =========================================================
+    group('ブーストゲージ表示', () => {
+        g.reset();
+        step(1);
+        check('満タン時はゲージ100%',
+            parseFloat(document.getElementById('boost-fill').style.width) === 100,
+            `w=${document.getElementById('boost-fill').style.width}`);
+
+        g.input.boost = true;
+        step(45);
+        g.input.boost = false;
+        step(1);
+        const w = parseFloat(document.getElementById('boost-fill').style.width);
+        check('消費するとゲージが減る', w < 100, `w=${w}`);
+
+        g.player.boostEnergy = C.BOOST_MAX * 0.1;
+        step(1);
+        check('残量が少ないと低残量スタイルになる',
+            document.getElementById('boost-fill').classList.contains('boost-low'));
+        g.reset();
+    });
+
+    // =========================================================
+    group('HUDパネルの表示崩れ防止', () => {
+        // 初期状態(STANDARD / DEF:MID / ROF:MID / PWR:MID)で
+        // PWRチップがパネル枠の右端をはみ出さないこと
+        g.reset(); setMode(1);
+        const panel = document.querySelector('#ui-layer .panel');
+        const pwrChip = document.getElementById('trait-pow').parentElement;
+        const pRect = panel.getBoundingClientRect();
+        const cRect = pwrChip.getBoundingClientRect();
+        check('PWRラベルが枠の右端をはみ出さない', cRect.right <= pRect.right + 0.5,
+            `chip.right=${cRect.right.toFixed(1)} panel.right=${pRect.right.toFixed(1)}`);
+
+        // HEAVY(最長のモード名)でもはみ出さない
+        setMode(2);
+        const pwrChip2 = document.getElementById('trait-pow').parentElement;
+        check('HEAVY表示でもPWRチップが枠内に収まる',
+            pwrChip2.getBoundingClientRect().right <= panel.getBoundingClientRect().right + 0.5);
+        g.reset();
     });
 
     // ---------- 後片付け:テスト後は静止させておく ----------

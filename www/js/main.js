@@ -28,8 +28,19 @@ const LASER_TURN_RATE = 8.0;  // 追尾レーザーの旋回の効き
 const TRAIL_LEN = 15;         // 飛翔体の軌跡の記録点数
 const MAX_LOCKS = 18;         // 同時ロック上限
 const LOCK_CONE_COS = 0.75;   // ロック可能な前方円錐(約41度)
-const BLINK_DIST = 60;        // ブリンクの移動距離
-const BLINK_COOLDOWN = 0.6;   // ブリンクの再使用待ち時間(秒)
+const BLINK_DIST = 80;        // ゼロシフト(短距離瞬間移動)の移動距離
+const BLINK_COOLDOWN = 0.6;   // ゼロシフトの再使用待ち時間(秒)
+
+// ---------- ブースト ----------
+// 方向キーと組み合わせるとその向きへ強くダッシュし、
+// 何も押していなければ前方(画面奥)へ突き進む感覚を出す。
+// 消費エネルギー制にして、押しっぱなしの無敵ばかりにならないよう制限する。
+const BOOST_FORCE_MULT = 3.6;   // ブースト中の推力倍率(方向ダッシュの効き)
+const BOOST_DRAG_MULT = 0.55;   // ブースト中は抵抗を弱めて最高速を伸ばす
+const BOOST_FLOW_EXTRA = 4.0;   // ブースト中に加わる前方の流速(星・岩が一気に流れる)
+const BOOST_MAX = 100;          // ブーストエネルギーの最大値
+const BOOST_DRAIN = 60;         // ブースト中の毎秒消費(満タンから約1.7秒)
+const BOOST_RECHARGE = 34;      // 非ブースト時の毎秒回復
 
 // ---------- ゲームルール定数 ----------
 const PLAYER_MAX_HP = 100;    // 機体の耐久値
@@ -47,9 +58,9 @@ const MISSILE_COUNT = 10;     // ミサイルの一斉発射数
 
 // サブ武器の定義(アイテムで入手し、メインショットと同時に使える)
 const SUB_WEAPONS = {
-    halberd: { name: 'ハルバード', cooldown: 5,  cssColor: '#66ffff', color: 0x66ffff },
-    comet:   { name: 'コメット',   cooldown: 1,  cssColor: '#ff66ff', color: 0xff66ff },
-    missile: { name: 'ホーミングミサイル', cooldown: 10, cssColor: '#ffaa33', color: 0xffaa33 },
+    halberd: { name: 'HALBERD', cooldown: 5,  cssColor: '#66ffff', color: 0x66ffff },
+    comet:   { name: 'COMET',   cooldown: 1,  cssColor: '#ff66ff', color: 0xff66ff },
+    missile: { name: 'HOMING MISSILE', cooldown: 10, cssColor: '#ffaa33', color: 0xffaa33 },
 };
 const ITEM_TYPES = ['halberd', 'comet', 'missile'];
 
@@ -61,6 +72,13 @@ const BOSS_SHOT_DAMAGE = 15;       // ボス弾の基本ダメージ
 const BOSS_BONUS_SCORE = 1000;     // ボス撃破ボーナス
 const REPAIR_HEAL = 30;            // 修理アイテムの回復量
 
+// ---------- アイテム取得 ----------
+const ITEM_PICKUP_RADIUS = 42;     // 取得判定の半径(甘めにして拾いやすく)
+const ITEM_MAGNET_RANGE = 170;     // この距離まで近づくと自機へ吸い寄せられる
+
+// ---------- チャレンジモード ----------
+const CHALLENGE_TIME = 120;        // 制限時間(秒)。無敵でスコアアタック
+
 // ---------- キー設定 ----------
 const DEFAULT_KEYS = {
     fire: 'Space', sub: 'KeyR', lock: 'KeyF',
@@ -68,10 +86,12 @@ const DEFAULT_KEYS = {
 };
 const KEY_ACTION_LABELS = {
     fire: 'ショット', sub: 'サブ武器', lock: '一斉ロックオン',
-    boost: 'ブースト', blink: 'ブリンク(瞬間移動)', mode: 'モード切替', help: 'ヘルプ / 一時停止',
+    boost: 'ブースト', blink: 'ゼロシフト(瞬間移動)', mode: 'モード切替', help: 'ヘルプ / 一時停止',
 };
-const KEYS_STORAGE = 'gravity-zero-keys';   // キー設定の保存先
-const BEST_STORAGE = 'gravity-zero-best';   // ハイスコアの保存先
+const KEYS_STORAGE = 'gravity-zero-keys';                   // キー設定の保存先
+const BEST_STORAGE = 'gravity-zero-best';                   // ハイスコアの保存先
+const RANK_STORAGE = 'gravity-zero-ranking';                // ランキング(上位5件)の保存先
+const CHALLENGE_BEST_STORAGE = 'gravity-zero-best-challenge'; // チャレンジモードのベスト
 
 /** キーコードを表示用の短い名前へ変換する */
 function keyLabel(code) {
@@ -95,27 +115,28 @@ function keyLabel(code) {
 //   fireInterval … 通常ショットの発射間隔(ms、小さいほど速射)
 //   bulletDamage … 通常ショット1発の威力
 //   traits       … HUDに表示する強み/弱みのラベル
+// HUDは英語表記(enName / traits)、ヘルプ画面の説明は日本語(name / desc)を使う
 const FLIGHT_MODES = [
     {
-        id: 'A', name: '軽量', color: '#ff3366',
+        id: 'A', name: '軽量', enName: 'LIGHT', color: '#ff3366',
         desc: '俊敏で慣性が残らない。連射は速いが装甲が薄く、被弾に弱い。',
         mass: 0.4, drag: 0.15, force: 360,
         damageMult: 1.6, fireInterval: 70, bulletDamage: 1,
-        traits: { def: '弱', fire: '速', pow: '標準' },
+        traits: { def: 'LOW', fire: 'FAST', pow: 'MID' },
     },
     {
-        id: 'B', name: '標準', color: '#00aaff',
+        id: 'B', name: '標準', enName: 'STANDARD', color: '#00aaff',
         desc: '操作性・防御・火力のバランスが取れた標準状態。',
         mass: 1.0, drag: 0.05, force: 290,
         damageMult: 1.0, fireInterval: 95, bulletDamage: 1,
-        traits: { def: '標準', fire: '標準', pow: '標準' },
+        traits: { def: 'MID', fire: 'MID', pow: 'MID' },
     },
     {
-        id: 'C', name: '重装', color: '#33ffaa',
+        id: 'C', name: '重装', enName: 'HEAVY', color: '#33ffaa',
         desc: '重く粘る慣性。装甲が厚く被弾に強いが、連射は遅め(一撃は重い)。',
         mass: 2.5, drag: 0.015, force: 215,
         damageMult: 0.5, fireInterval: 140, bulletDamage: 2,
-        traits: { def: '強', fire: '遅', pow: '高' },
+        traits: { def: 'HIGH', fire: 'SLOW', pow: 'HIGH' },
     },
 ];
 
@@ -152,6 +173,7 @@ class PlayerCraft {
         this.visualPitch = 0;  // 縦移動に応じた機首の上下
 
         this.isBoosting = false;
+        this.boostEnergy = BOOST_MAX;  // ブーストの残りエネルギー
         this.blinkCooldown = 0;
         this.freezeTimer = 0;      // レーザー発射後の硬直
         this.hitInvincible = 0;    // 被弾直後の無敵時間
@@ -236,9 +258,15 @@ class PlayerCraft {
 
     update(dt, input, mode) {
         const game = this.game;
-        this.isBoosting = input.boost && this.freezeTimer <= 0;
 
-        if (this.isBoosting) game.audio.playBoost();
+        // ---------- ブースト(エネルギーを消費して高速移動) ----------
+        this.isBoosting = input.boost && this.freezeTimer <= 0 && this.boostEnergy > 0;
+        if (this.isBoosting) {
+            this.boostEnergy = Math.max(0, this.boostEnergy - BOOST_DRAIN * dt);
+            game.audio.playBoost();
+        } else {
+            this.boostEnergy = Math.min(BOOST_MAX, this.boostEnergy + BOOST_RECHARGE * dt);
+        }
 
         // ---------- 一斉ロックオン ----------
         if (input.lock) {
@@ -325,8 +353,11 @@ class PlayerCraft {
         }
 
         // ---------- 慣性モデル(推力と速度依存の抵抗) ----------
-        const force = mode.force * (this.isBoosting ? 2.5 : 1.0);
-        const drag = mode.drag * (this.isBoosting ? 0.8 : 1.0);
+        // ブースト中は推力を大きく上げ、抵抗を弱めて「方向キーの向きへ高速ダッシュ」する。
+        // 方向キーを押していない場合は、前方(画面奥)への突進として world flow を加速させる
+        // (自機のZ移動はないため、星や岩の流れで前進感を表現する)。
+        const force = mode.force * (this.isBoosting ? BOOST_FORCE_MULT : 1.0);
+        const drag = mode.drag * (this.isBoosting ? BOOST_DRAG_MULT : 1.0);
 
         this.accel.x = (input.x * force) / mode.mass;
         this.accel.y = (input.y * force) / mode.mass;
@@ -416,6 +447,16 @@ class Game {
         this.bossFireTimer = 0;
         this.nextBossScore = BOSS_FIRST_SCORE;
 
+        // ゲームモード('normal' | 'challenge')と開始レベル
+        this.gameMode = 'normal';
+        this.challengeTimeLeft = 0;
+        this.startLevel = 1;
+
+        // デバッグモード(F2 または URLに ?debug で表示)
+        this.debugEnabled = false;
+        this.debugGod = false;
+        this.debugPanel = null;
+
         // キー設定(保存済みがあれば復元する)
         this.keyBindings = { ...DEFAULT_KEYS };
         try {
@@ -437,16 +478,39 @@ class Game {
         // 開始画面:最初のタップで音声を有効化してから開始する
         const startOverlay = document.getElementById('start-overlay');
         this.helpOpen = false;
-        const begin = () => {
+        const begin = (modeName) => {
             this.audio.init();
+            this.gameMode = modeName;
+            this.reset();
             startOverlay.style.display = 'none';
             document.getElementById('help-btn').style.display = 'flex';
             this.setupInputs();
         };
-        // 開始ボタンをタップして開始(スクロール中の誤爆を防ぐためボタンに限定)
-        const startBtn = startOverlay.querySelector('.start-btn');
-        startBtn.addEventListener('click', begin);
-        startBtn.addEventListener('touchend', (e) => { e.preventDefault(); begin(); }, { once: true });
+        const bindStart = (el, modeName) => {
+            if (!el) return;
+            el.addEventListener('click', () => begin(modeName));
+            el.addEventListener('touchend', (e) => { e.preventDefault(); begin(modeName); });
+        };
+        bindStart(startOverlay.querySelector('.start-btn'), 'normal');
+        bindStart(document.getElementById('challenge-btn'), 'challenge');
+
+        // 開始レベル選択(1 → 3 → 5 の循環)
+        const levelSelect = document.getElementById('level-select');
+        if (levelSelect) {
+            levelSelect.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.cycleStartLevel();
+            });
+        }
+
+        // ゲームオーバー画面からタイトルへ戻る
+        const toTitle = document.getElementById('to-title');
+        if (toTitle) {
+            toTitle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.backToTitle();
+            });
+        }
 
         // ヘルプ / 一時停止
         document.getElementById('help-btn').addEventListener('click', () => this.toggleHelp());
@@ -458,6 +522,9 @@ class Game {
         // キーコンフィグUIの構築と、キー割り当て入力の受付
         this.buildKeyConfigUI();
         this.setupKeyCapture();
+
+        // URLに ?debug が付いていればデバッグパネルを開いた状態で起動する
+        if (location.search.includes('debug')) this.toggleDebug();
 
         // タブが隠れたら自動で一時停止する(見ていない間の被弾を防ぐ)
         document.addEventListener('visibilitychange', () => {
@@ -524,6 +591,7 @@ class Game {
         this.scene.add(this.beamGroup);
 
         this.buildBoss();
+        this.buildShockwave();
         this.buildStarfield();
         this.buildDebris();
         this.buildParticles();
@@ -637,6 +705,27 @@ class Game {
             size: 38, hp: 0, maxHp: 1, locked: false,
             colorHex: '#ff4455', vel: new THREE.Vector3(),
         };
+    }
+
+    /** ボス撃破時に広がる衝撃波リング */
+    buildShockwave() {
+        this.shockwave = new THREE.Mesh(
+            new THREE.RingGeometry(0.92, 1, 48),
+            new THREE.MeshBasicMaterial({
+                color: 0xffbb88, transparent: true, opacity: 0.9,
+                side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+            })
+        );
+        this.shockwave.visible = false;
+        this.scene.add(this.shockwave);
+        this.shockwaveLife = 0;
+    }
+
+    triggerShockwave(x, y, z) {
+        this.shockwave.position.set(x, y, z);
+        this.shockwaveLife = 1;
+        this.shockwave.scale.setScalar(12);
+        this.shockwave.visible = true;
     }
 
     // ---------- オブジェクトプール ----------
@@ -761,6 +850,10 @@ class Game {
 
     // ---------- 入力 ----------
     setupInputs() {
+        // タイトルへ戻って再開しても二重登録しない
+        if (this._inputsBound) return;
+        this._inputsBound = true;
+
         const keys = {
             KeyW: false, KeyA: false, KeyS: false, KeyD: false,
             ArrowUp: false, ArrowLeft: false, ArrowDown: false, ArrowRight: false,
@@ -779,6 +872,8 @@ class Game {
 
         window.addEventListener('keydown', (e) => {
             const b = this.keyBindings;
+            // F2:デバッグパネルの表示切替(いつでも受け付ける)
+            if (e.code === 'F2') { this.toggleDebug(); return; }
             // ヘルプ / 一時停止のトグル(停止中でも受け付ける)
             if (e.code === b.help) { this.toggleHelp(); return; }
             // 一時停止中はゲーム操作を無視する
@@ -879,12 +974,12 @@ class Game {
     updateModeUI() {
         const mode = FLIGHT_MODES[this.currentModeIndex];
         const nameEl = document.getElementById('mode-display');
-        nameEl.innerText = mode.name;
+        nameEl.innerText = mode.enName;
         nameEl.style.color = mode.color;
 
         // モード固有の個性(防御・連射・火力)を色分けして表示する
-        const rank = (label) => (label === '強' || label === '速' || label === '高') ? 'good'
-            : (label === '弱' || label === '遅') ? 'bad' : 'mid';
+        const rank = (label) => (label === 'HIGH' || label === 'FAST') ? 'good'
+            : (label === 'LOW' || label === 'SLOW') ? 'bad' : 'mid';
         const setTrait = (id, label) => {
             const el = document.getElementById(id);
             el.innerText = label;
@@ -902,9 +997,23 @@ class Game {
     addScore(points) {
         this.score += points;
         // スコアに応じてレベルが上がり、敵の出現数・速度・耐久が増す
-        this.level = 1 + Math.floor(this.score / SCORE_PER_LEVEL);
+        // (タイトルで選んだ開始レベルが下駄になる)
+        this.level = this.startLevel + Math.floor(this.score / SCORE_PER_LEVEL);
         document.getElementById('score-display').innerText = this.score;
         document.getElementById('level-display').innerText = this.level;
+    }
+
+    /** タイトルの開始レベル選択(1 → 3 → 5 の循環) */
+    cycleStartLevel() {
+        const options = [1, 3, 5];
+        const next = options[(options.indexOf(this.startLevel) + 1) % options.length];
+        this.setStartLevel(next);
+    }
+
+    setStartLevel(n) {
+        this.startLevel = n;
+        const el = document.getElementById('start-level-val');
+        if (el) el.innerText = n;
     }
 
     updateHpBar() {
@@ -926,14 +1035,23 @@ class Game {
     }
 
     damagePlayer(amount) {
+        // デバッグのGODモード中はダメージを受けない
+        if (this.debugGod) return;
+        // チャレンジモードは無敵:軽い揺れだけ返す
+        if (this.gameMode === 'challenge') {
+            this.shakeIntensity = Math.max(this.shakeIntensity, 0.35);
+            return;
+        }
+
         // モードごとの装甲(damageMult)で被弾ダメージを増減させる
         const dealt = amount * FLIGHT_MODES[this.currentModeIndex].damageMult;
         this.hp = Math.max(0, this.hp - dealt);
         this.updateHpBar();
         this.player.hitInvincible = HIT_INVINCIBLE_TIME;
         this.jerkIntensity = 1.0;
-        this.shakeIntensity = 1.0;
-        this.damageFlash = 0.7;
+        // 大ダメージほど画面が大きく揺れ、フラッシュも強くなる
+        this.shakeIntensity = Math.min(1.5, 0.6 + dealt / 25);
+        this.damageFlash = Math.min(1, 0.45 + dealt / 60);
         this.triggerSpeedLines(10);
         this.audio.playDamage();
         if (this.hp <= 0) this.gameOver();
@@ -942,6 +1060,7 @@ class Game {
     gameOver() {
         if (this.state === 'gameover') return;
         this.state = 'gameover';
+        const isChallenge = this.gameMode === 'challenge';
 
         const p = this.player;
         p.beamActive = false;
@@ -955,28 +1074,90 @@ class Game {
         p.lockRange = 0;
         this.lockCone.visible = false;
 
-        // 撃墜演出
-        this.spawnExplosion(p.pos.x, p.pos.y, p.pos.z, '#ff5533', 40);
-        this.spawnExplosion(p.pos.x, p.pos.y, p.pos.z, '#ffffff', 30);
-        p.group.visible = false;
-        this.shakeIntensity = 1.5;
-        this.damageFlash = 1.0;
+        // 撃墜演出(チャレンジの時間切れでは機体は無事のまま)
+        if (!isChallenge) {
+            this.spawnExplosion(p.pos.x, p.pos.y, p.pos.z, '#ff5533', 40);
+            this.spawnExplosion(p.pos.x, p.pos.y, p.pos.z, '#ffffff', 30);
+            p.group.visible = false;
+            this.shakeIntensity = 1.5;
+            this.damageFlash = 1.0;
+        }
+
+        // 見出し:通常は GAME OVER、チャレンジは TIME UP
+        const titleEl = document.getElementById('gameover-title');
+        if (titleEl) {
+            titleEl.innerText = isChallenge ? 'TIME UP' : 'GAME OVER';
+            titleEl.style.color = isChallenge ? '#ffcc55' : '#ff6655';
+            titleEl.style.textShadow = isChallenge ? '0 0 16px #fa0' : '0 0 16px #f00';
+        }
 
         document.getElementById('final-score').innerText = this.score;
         document.getElementById('final-kills').innerText = this.killCount;
 
-        // ハイスコアを更新して表示する
+        // ハイスコア(モード別)を更新して表示する
+        const bestKey = isChallenge ? CHALLENGE_BEST_STORAGE : BEST_STORAGE;
         let best = 0;
-        try { best = parseInt(localStorage.getItem(BEST_STORAGE) || '0', 10) || 0; } catch (e) { /* 読めなければ0扱い */ }
+        try { best = parseInt(localStorage.getItem(bestKey) || '0', 10) || 0; } catch (e) { /* 読めなければ0扱い */ }
         if (this.score > best) {
             best = this.score;
-            try { localStorage.setItem(BEST_STORAGE, String(best)); } catch (e) { /* 保存不可でも続行 */ }
+            try { localStorage.setItem(bestKey, String(best)); } catch (e) { /* 保存不可でも続行 */ }
         }
         document.getElementById('best-score').innerText = best;
+
+        // ランキングは通常モードのみ記録・表示する
+        if (isChallenge) {
+            const rb = document.getElementById('ranking-box');
+            if (rb) rb.style.display = 'none';
+        } else {
+            this.saveScoreToRanking(this.score);
+            this.renderRanking(this.score);
+        }
 
         document.getElementById('boss-bar-wrap').style.display = 'none';
         document.getElementById('gameover-overlay').style.display = 'flex';
         document.getElementById('help-btn').style.display = 'none';
+    }
+
+    // ---------- ランキング(ローカル上位5件) ----------
+    saveScoreToRanking(score) {
+        let arr = [];
+        try { arr = JSON.parse(localStorage.getItem(RANK_STORAGE) || '[]'); } catch (e) { /* 壊れていたら作り直す */ }
+        if (!Array.isArray(arr)) arr = [];
+        arr.push(score);
+        arr.sort((a, b) => b - a);
+        arr = arr.slice(0, 5);
+        try { localStorage.setItem(RANK_STORAGE, JSON.stringify(arr)); } catch (e) { /* 保存不可でも続行 */ }
+        return arr;
+    }
+
+    renderRanking(currentScore) {
+        const list = document.getElementById('ranking-list');
+        const box = document.getElementById('ranking-box');
+        if (!list || !box) return;
+        let arr = [];
+        try { arr = JSON.parse(localStorage.getItem(RANK_STORAGE) || '[]'); } catch (e) { /* 読めなければ空 */ }
+        list.innerHTML = '';
+        let highlighted = false;
+        arr.forEach(score => {
+            const li = document.createElement('li');
+            li.textContent = score;
+            // 今回のスコアが載っていたら1件だけ強調する
+            if (!highlighted && score === currentScore) {
+                li.className = 'rank-new';
+                highlighted = true;
+            }
+            list.appendChild(li);
+        });
+        box.style.display = arr.length > 0 ? 'block' : 'none';
+    }
+
+    /** ゲームオーバー画面からタイトルへ戻る */
+    backToTitle() {
+        this.reset();
+        this.state = 'title';
+        document.getElementById('start-overlay').style.display = 'flex';
+        document.getElementById('help-btn').style.display = 'none';
+        this.refreshBestOnTitle();
     }
 
     // ---------- ヘルプ / 一時停止 ----------
@@ -1022,7 +1203,7 @@ class Game {
     /** ゲームオーバー後の再スタート:全状態を初期化する */
     reset() {
         this.score = 0;
-        this.level = 1;
+        this.level = this.startLevel;
         this.hp = PLAYER_MAX_HP;
         this.killCount = 0;
         this.enemyIdCounter = 0;
@@ -1039,6 +1220,8 @@ class Game {
         p.visualPitch = 0;
         p.freezeTimer = 0;
         p.blinkCooldown = 0;
+        p.boostEnergy = BOOST_MAX;
+        p.isBoosting = false;
         p.hitInvincible = 0;
         p.wasLocking = false;
         p.lockRange = 0;
@@ -1062,12 +1245,27 @@ class Game {
         deactivate(this.enemyShots, o => { o.mesh.visible = false; });
         deactivate(this.fxLines);
 
-        // ボスも初期状態へ
+        // ボスも初期状態へ(断末魔の途中でも打ち切る)
         this.boss.active = false;
+        this.boss.dying = false;
         this.boss.mesh.visible = false;
         this.boss.locked = false;
         this.nextBossScore = BOSS_FIRST_SCORE;
+        this.shockwaveLife = 0;
+        this.shockwave.visible = false;
         document.getElementById('boss-bar-wrap').style.display = 'none';
+
+        // チャレンジモードの制限時間
+        const timeEl = document.getElementById('challenge-time');
+        if (this.gameMode === 'challenge') {
+            this.challengeTimeLeft = CHALLENGE_TIME;
+            if (timeEl) {
+                timeEl.style.display = 'block';
+                timeEl.innerText = this.formatTime(CHALLENGE_TIME);
+            }
+        } else if (timeEl) {
+            timeEl.style.display = 'none';
+        }
 
         // 押しっぱなしの入力が持ち越されないようにする
         Object.assign(this.input, {
@@ -1087,10 +1285,11 @@ class Game {
 
         // HUDを初期状態へ
         document.getElementById('score-display').innerText = '0';
-        document.getElementById('level-display').innerText = '1';
+        document.getElementById('level-display').innerText = this.level;
         document.getElementById('hp-fill').style.width = '100%';
+        document.getElementById('boost-fill').style.width = '100%';
         const subName = document.getElementById('sub-name');
-        subName.innerText = 'なし';
+        subName.innerText = 'NONE';
         subName.style.color = '';
         this.updateModeUI();
         document.getElementById('gameover-overlay').style.display = 'none';
@@ -1234,6 +1433,53 @@ class Game {
         }
     }
 
+    /**
+     * 敵を1機出現させる。種類は3タイプ:
+     *   rush   … まっすぐ突っ込んでくる基本型
+     *   weave  … 左右へ大きく蛇行しながら接近する(狙いを外しやすい)
+     *   gunner … ゆっくり近づきながら自機を狙った単発弾を撃つ(レベル2以降)
+     */
+    spawnEnemyUnit(forcedKind = null) {
+        const enemy = this.enemies.get();
+        if (!enemy) return null;
+
+        let kind = forcedKind;
+        if (!kind) {
+            const r = Math.random();
+            kind = (this.level >= 2 && r < 0.22) ? 'gunner' : (r < 0.55 ? 'weave' : 'rush');
+        }
+        enemy.kind = kind;
+        enemy.wavePhase = Math.random() * Math.PI * 2;
+        enemy.fireTimer = 1.2 + Math.random() * 0.8;
+
+        enemy.id = ++this.enemyIdCounter;
+        enemy.size = Math.random() * 8 + 8;
+        // レベルに応じて耐久を底上げする(砲撃型はやや硬い)
+        enemy.hp = (enemy.size > 12 ? 2 : 1) + Math.floor((this.level - 1) / 3) + (kind === 'gunner' ? 1 : 0);
+        enemy.locked = false;
+
+        enemy.mesh.position.set(
+            (Math.random() - 0.5) * 2 * (BOUND_X + 40),
+            (Math.random() - 0.5) * 2 * (BOUND_Y + 30),
+            SPAWN_Z
+        );
+        // レベルに応じて突入速度も上げる(上限あり)
+        const speedScale = Math.min(2.4, 1 + (this.level - 1) * 0.10);
+        enemy.vel.set(
+            (Math.random() - 0.5) * 50,
+            (Math.random() - 0.5) * 50,
+            (Math.random() * 120 + 150) * speedScale * (kind === 'gunner' ? 0.45 : 1)
+        );
+
+        // 砲撃型は固定色(オレンジ)にして見分けられるようにする
+        const matIndex = kind === 'gunner' ? 1 : Math.floor(Math.random() * this.enemyMats.length);
+        enemy.mesh.material = this.enemyMats[matIndex];
+        enemy.colorHex = '#' + this.enemyMats[matIndex].emissive.getHexString();
+        enemy.mesh.scale.setScalar(enemy.size);
+        enemy.mesh.visible = true;
+        return enemy;
+    }
+
     /** ロックオン・追尾兵器の対象(通常の敵+ボス)を列挙する */
     forEachTargetable(callback) {
         this.enemies.forEachActive(callback);
@@ -1289,7 +1535,9 @@ class Game {
     defeatBoss() {
         const boss = this.boss;
         boss.active = false;
-        boss.mesh.visible = false;
+        // 断末魔シーケンスへ(報酬は即時、演出は約1.5秒かけて爆発する)
+        boss.dying = true;
+        boss.dyingTime = 0;
         if (boss.locked) this.player.removeLock(boss);
         document.getElementById('boss-bar-wrap').style.display = 'none';
 
@@ -1302,21 +1550,52 @@ class Game {
 
         // 撃破ボーナスと修理アイテムの確定ドロップ
         const pos = boss.mesh.position;
-        this.spawnExplosion(pos.x, pos.y, pos.z, '#ff4455', 40);
-        this.spawnExplosion(pos.x, pos.y, pos.z, '#ffffff', 30);
+        this.spawnExplosion(pos.x, pos.y, pos.z, '#ff4455', 20);
         this.addScore(BOSS_BONUS_SCORE);
         this.spawnItem({ x: pos.x, y: pos.y, z: pos.z }, 'repair');
         this.nextBossScore = this.score + BOSS_SCORE_INTERVAL;
-        this.jerkIntensity = 1.0;
-        this.shakeIntensity = 0.8;
-        this.triggerSpeedLines(30);
+        this.jerkIntensity = 0.6;
+        this.shakeIntensity = 0.5;
+        this.triggerSpeedLines(20);
+    }
+
+    /** ボスの断末魔:震えながら連鎖爆発し、最後に大爆発+衝撃波で消える */
+    updateBossDeath(dt) {
+        const boss = this.boss;
+        if (!boss.dying) return;
+        boss.dyingTime += dt;
+        const pos = boss.mesh.position;
+
+        boss.core.rotation.x += dt * 4;
+        this.bossRing.rotation.z += dt * 6;
+        pos.x += (Math.random() - 0.5) * 5;
+        pos.y += (Math.random() - 0.5) * 5;
+        if (Math.random() < dt * 16) {
+            this.spawnExplosion(
+                pos.x + (Math.random() - 0.5) * 80,
+                pos.y + (Math.random() - 0.5) * 80,
+                pos.z + (Math.random() - 0.5) * 60,
+                '#ff8866', 8);
+        }
+
+        if (boss.dyingTime >= 1.5) {
+            boss.dying = false;
+            boss.mesh.visible = false;
+            // 最後の大爆発+衝撃波+強い画面揺れ
+            this.spawnExplosion(pos.x, pos.y, pos.z, '#ff4455', 60);
+            this.spawnExplosion(pos.x, pos.y, pos.z, '#ffffff', 40);
+            this.triggerShockwave(pos.x, pos.y, pos.z);
+            this.shakeIntensity = 1.6;
+            this.jerkIntensity = 1.0;
+            this.triggerSpeedLines(45);
+        }
     }
 
     updateBoss(dt, player) {
         const boss = this.boss;
         if (!boss.active) {
-            // スコアが基準に達したらボス出現
-            if (this.score >= this.nextBossScore) this.spawnBoss();
+            // スコアが基準に達したらボス出現(断末魔の最中は待つ)
+            if (!boss.dying && this.score >= this.nextBossScore) this.spawnBoss();
             return;
         }
         this.bossTime += dt;
@@ -1349,6 +1628,62 @@ class Game {
                 shot.mesh.visible = true;
             }
         }
+    }
+
+    // ---------- デバッグモード ----------
+    /** デバッグパネル(F2 / ?debug で開閉)。動作検証用のチートを並べる */
+    buildDebugPanel() {
+        if (this.debugPanel) return;
+        const panel = document.createElement('div');
+        panel.id = 'debug-panel';
+        panel.innerHTML = `
+            <div id="debug-stats">--</div>
+            <div class="debug-btns">
+                <button data-dbg="god">GOD: OFF</button>
+                <button data-dbg="boss">BOSS</button>
+                <button data-dbg="score">+1000</button>
+                <button data-dbg="level">LV+1</button>
+                <button data-dbg="heal">HEAL</button>
+                <button data-dbg="clear">CLEAR</button>
+                <button data-dbg="weapon">WEAPON</button>
+            </div>`;
+        document.body.appendChild(panel);
+
+        panel.addEventListener('click', (e) => {
+            const act = e.target.dataset ? e.target.dataset.dbg : null;
+            if (!act) return;
+            e.stopPropagation();
+            if (act === 'god') {
+                this.debugGod = !this.debugGod;
+                e.target.textContent = 'GOD: ' + (this.debugGod ? 'ON' : 'OFF');
+            } else if (act === 'boss') {
+                if (!this.boss.active && !this.boss.dying) this.spawnBoss();
+            } else if (act === 'score') {
+                this.addScore(1000);
+            } else if (act === 'level') {
+                this.addScore(SCORE_PER_LEVEL);
+            } else if (act === 'heal') {
+                this.healPlayer(PLAYER_MAX_HP);
+            } else if (act === 'clear') {
+                this.enemies.forEachActive(en => this.destroyEnemy(en, false));
+            } else if (act === 'weapon') {
+                const next = ITEM_TYPES[(ITEM_TYPES.indexOf(this.player.subWeapon) + 1) % ITEM_TYPES.length];
+                this.equipSubWeapon(next);
+            }
+        });
+        this.debugPanel = panel;
+    }
+
+    toggleDebug() {
+        this.buildDebugPanel();
+        this.debugEnabled = !this.debugEnabled;
+        this.debugPanel.style.display = this.debugEnabled ? 'block' : 'none';
+    }
+
+    /** 残り時間などの M:SS 表示 */
+    formatTime(t) {
+        const sec = Math.max(0, Math.floor(t));
+        return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
     }
 
     // ---------- キーコンフィグ ----------
@@ -1601,7 +1936,8 @@ class Game {
         if (playing) player.update(dt, this.input, mode);
 
         // ---------- 星と岩塊のスクロール(常時) ----------
-        const flowBoost = 1 + this.jerkIntensity * 2;
+        // ブースト中は前方への流れを大きく加速し、突進している感覚を強める
+        const flowBoost = 1 + this.jerkIntensity * 2 + (this.player.isBoosting ? BOOST_FLOW_EXTRA : 0);
         const starPos = this.stars.geometry.attributes.position;
         for (let i = 0; i < this.starSpeeds.length; i++) {
             let z = starPos.getZ(i) + this.starSpeeds[i] * flowBoost * dt;
@@ -1662,6 +1998,38 @@ class Game {
             if (line.life <= 0) line.active = false;
         });
 
+        // ---------- 衝撃波リングの拡散(常時) ----------
+        if (this.shockwaveLife > 0) {
+            this.shockwaveLife -= dt * 1.4;
+            if (this.shockwaveLife <= 0) {
+                this.shockwave.visible = false;
+            } else {
+                const s = (1 - this.shockwaveLife) * 320 + 12;
+                this.shockwave.scale.setScalar(s);
+                this.shockwave.material.opacity = this.shockwaveLife * 0.9;
+            }
+        }
+
+        // ---------- ボスの断末魔(常時:ゲームオーバー中でも完走させる) ----------
+        this.updateBossDeath(dt);
+
+        // ---------- デバッグ統計(パネル表示中のみ) ----------
+        if (this.debugEnabled) {
+            this._dbgAcc = (this._dbgAcc || 0) + dt;
+            this._dbgFrames = (this._dbgFrames || 0) + 1;
+            if (this._dbgAcc >= 0.5) {
+                const cnt = pool => { let n = 0; pool.forEachActive(() => n++); return n; };
+                const statsEl = document.getElementById('debug-stats');
+                if (statsEl) {
+                    statsEl.textContent =
+                        `FPS ${Math.round(this._dbgFrames / this._dbgAcc)} | LV ${this.level}` +
+                        ` | ENEMY ${cnt(this.enemies)} | SHOT ${cnt(this.enemyShots)} | ${this.gameMode.toUpperCase()}`;
+                }
+                this._dbgAcc = 0;
+                this._dbgFrames = 0;
+            }
+        }
+
         // ---------- 演出値の減衰(常時) ----------
         this.jerkIntensity = Math.max(0, this.jerkIntensity - dt * 5);
         this.shakeIntensity = Math.max(0, this.shakeIntensity - dt * 3);
@@ -1673,6 +2041,17 @@ class Game {
     /** プレイ中のみ実行するゲームロジック */
     updateGameplay(dt, player) {
         const mode = FLIGHT_MODES[this.currentModeIndex];
+
+        // ---------- チャレンジモードの残り時間 ----------
+        if (this.gameMode === 'challenge') {
+            this.challengeTimeLeft -= dt;
+            const timeEl = document.getElementById('challenge-time');
+            if (timeEl) timeEl.innerText = this.formatTime(this.challengeTimeLeft);
+            if (this.challengeTimeLeft <= 0) {
+                this.gameOver();
+                return;
+            }
+        }
 
         // ---------- 通常弾の発射(モードごとに連射間隔が変わる) ----------
         if (this.input.fire && player.freezeTimer <= 0 && performance.now() - this.lastFireTime > mode.fireInterval) {
@@ -1709,33 +2088,7 @@ class Game {
             // ボス戦中は雑魚の出現を減らして、ボスに集中できるようにする
             this.spawnTimer = (Math.random() * 0.5 + 0.25) / (1 + (this.level - 1) * 0.18)
                 * (this.boss.active ? 2.5 : 1);
-            const enemy = this.enemies.get();
-            if (enemy) {
-                enemy.id = ++this.enemyIdCounter;
-                enemy.size = Math.random() * 8 + 8;
-                // レベルに応じて耐久を底上げする
-                enemy.hp = (enemy.size > 12 ? 2 : 1) + Math.floor((this.level - 1) / 3);
-                enemy.locked = false;
-
-                enemy.mesh.position.set(
-                    (Math.random() - 0.5) * 2 * (BOUND_X + 40),
-                    (Math.random() - 0.5) * 2 * (BOUND_Y + 30),
-                    SPAWN_Z
-                );
-                // レベルに応じて突入速度も上げる(上限あり)
-                const speedScale = Math.min(2.4, 1 + (this.level - 1) * 0.10);
-                enemy.vel.set(
-                    (Math.random() - 0.5) * 50,
-                    (Math.random() - 0.5) * 50,
-                    (Math.random() * 120 + 150) * speedScale
-                );
-
-                const matIndex = Math.floor(Math.random() * this.enemyMats.length);
-                enemy.mesh.material = this.enemyMats[matIndex];
-                enemy.colorHex = '#' + this.enemyMats[matIndex].emissive.getHexString();
-                enemy.mesh.scale.setScalar(enemy.size);
-                enemy.mesh.visible = true;
-            }
+            this.spawnEnemyUnit();
         }
 
         // ---------- 敵の更新と衝突判定 ----------
@@ -1750,6 +2103,25 @@ class Game {
             e.vel.y += Math.sign(player.pos.y - e.mesh.position.y) * steer * dt;
             e.vel.x = Math.max(-90, Math.min(90, e.vel.x));
             e.vel.y = Math.max(-90, Math.min(90, e.vel.y));
+
+            // ---------- 種類ごとの挙動 ----------
+            if (e.kind === 'weave') {
+                // 蛇行型:左右へ大きく揺れながら接近する
+                e.wavePhase += dt * 3;
+                e.vel.x = Math.sin(e.wavePhase) * 130;
+            } else if (e.kind === 'gunner') {
+                // 砲撃型:遠距離から自機を狙って単発弾を撃つ
+                e.fireTimer -= dt;
+                if (e.fireTimer <= 0 && e.mesh.position.z < -250) {
+                    e.fireTimer = 1.8;
+                    const shot = this.enemyShots.get();
+                    if (shot) {
+                        shot.mesh.position.copy(e.mesh.position);
+                        shot.vel.subVectors(player.pos, e.mesh.position).normalize().multiplyScalar(300);
+                        shot.mesh.visible = true;
+                    }
+                }
+            }
 
             e.mesh.position.addScaledVector(e.vel, dt);
             e.mesh.rotation.x += dt * 1.2;
@@ -1879,6 +2251,19 @@ class Game {
 
         // ---------- アイテムの更新と取得 ----------
         this.items.forEachActive(item => {
+            // 近づいたアイテムは自機へ吸い寄せる(取り逃し防止)
+            const mx = player.pos.x - item.group.position.x;
+            const my = player.pos.y - item.group.position.y;
+            const mz = player.pos.z - item.group.position.z;
+            const mSq = mx * mx + my * my + mz * mz;
+            if (mSq < ITEM_MAGNET_RANGE * ITEM_MAGNET_RANGE && mSq > 1) {
+                const md = Math.sqrt(mSq);
+                const pull = (1 - md / ITEM_MAGNET_RANGE) * 1400; // 近いほど強く引く
+                item.vel.x += (mx / md) * pull * dt;
+                item.vel.y += (my / md) * pull * dt;
+                item.vel.z += (mz / md) * pull * dt;
+            }
+
             item.group.position.addScaledVector(item.vel, dt);
             item.group.rotation.y += dt * 2.5;
             item.group.rotation.x += dt * 1.2;
@@ -1888,8 +2273,7 @@ class Game {
                 item.group.visible = false;
                 return;
             }
-            // 取得判定はやや甘めにして拾いやすくする
-            if (item.group.position.distanceToSquared(player.pos) < 30 * 30) {
+            if (mSq < ITEM_PICKUP_RADIUS * ITEM_PICKUP_RADIUS) {
                 if (item.type === 'repair') {
                     // 修理アイテム:装備は変えずに耐久を回復する
                     this.healPlayer(REPAIR_HEAL);
@@ -1915,6 +2299,11 @@ class Game {
         // ---------- HUDゲージの更新 ----------
         const blinkRatio = Math.max(0, Math.min(1, 1 - player.blinkCooldown / BLINK_COOLDOWN));
         document.getElementById('cooldown-fill').style.width = (blinkRatio * 100) + '%';
+
+        // ブーストエネルギー(残量が少ないと色を落として枯渇を知らせる)
+        const boostEl = document.getElementById('boost-fill');
+        boostEl.style.width = (player.boostEnergy / BOOST_MAX * 100) + '%';
+        boostEl.classList.toggle('boost-low', player.boostEnergy < BOOST_MAX * 0.25);
 
         let subRatio = 0;
         if (player.subWeapon) {
@@ -2050,9 +2439,14 @@ window.ZMF = {
         BOUND_X, BOUND_Y, SPAWN_Z, DESPAWN_Z,
         BULLET_SPEED, LASER_SPEED, MISSILE_SPEED, MISSILE_COUNT,
         PLAYER_MAX_HP, COLLISION_DAMAGE, HIT_INVINCIBLE_TIME, SCORE_PER_LEVEL,
-        BEAM_RADIUS, BEAM_DPS, BEAM_MAX_DURATION, COMET_SPEED, BLINK_COOLDOWN,
+        BEAM_RADIUS, BEAM_DPS, BEAM_MAX_DURATION, COMET_SPEED, BLINK_COOLDOWN, BLINK_DIST,
         BOSS_FIRST_SCORE, BOSS_SCORE_INTERVAL, BOSS_SHOT_SPEED, BOSS_SHOT_DAMAGE,
         BOSS_BONUS_SCORE, REPAIR_HEAL,
+        ITEM_PICKUP_RADIUS, ITEM_MAGNET_RANGE, CHALLENGE_TIME,
+        BOOST_FORCE_MULT, BOOST_DRAG_MULT, BOOST_FLOW_EXTRA, BOOST_MAX, BOOST_DRAIN, BOOST_RECHARGE,
     },
-    storageKeys: { keys: KEYS_STORAGE, best: BEST_STORAGE },
+    storageKeys: {
+        keys: KEYS_STORAGE, best: BEST_STORAGE,
+        ranking: RANK_STORAGE, challengeBest: CHALLENGE_BEST_STORAGE,
+    },
 };

@@ -39,12 +39,14 @@
 
 <div id="start-overlay">
     <div class="game-title">GRAVITY ZERO</div>
-    <div class="game-subtitle">3D フライトシューター</div>
+    <div class="game-subtitle">3D FLIGHT SHOOTER</div>
     <div class="quick-hints">
         <div><b>WASD</b> 移動 ・ <b>SPACE</b> ショット</div>
     </div>
-    <div class="start-btn">タップして開始</div>
-    <div class="best-line">ベストスコア <span id="start-best">0</span></div>
+    <div class="start-btn">TAP TO START</div>
+    <div class="start-btn start-btn-sub" id="challenge-btn">CHALLENGE MODE<small>2 MIN / INVINCIBLE / SCORE ATTACK</small></div>
+    <div class="level-select" id="level-select">START LEVEL <b id="start-level-val">1</b> ▸</div>
+    <div class="best-line">BEST SCORE <span id="start-best">0</span></div>
 </div>
 
 <div id="help-overlay" style="display: none;">
@@ -65,34 +67,45 @@
 </div>
 
 <div id="gameover-overlay" style="display: none;">
-    <div class="game-title">GAME OVER</div>
-    <div class="game-subtitle">スコア <span id="final-score">0</span> ・ 撃破 <span id="final-kills">0</span></div>
-    <div class="game-subtitle">ベスト <span id="best-score">0</span></div>
-    <div class="start-btn">もう一度</div>
+    <div class="game-title" id="gameover-title">GAME OVER</div>
+    <div class="game-subtitle">SCORE <span id="final-score">0</span> ・ KILLS <span id="final-kills">0</span></div>
+    <div class="game-subtitle">BEST <span id="best-score">0</span></div>
+    <div id="ranking-box" style="display: none;">
+        <div class="rank-title">RANKING — TOP 5</div>
+        <ol id="ranking-list"></ol>
+    </div>
+    <div class="start-btn">RESTART</div>
+    <div class="start-btn start-btn-sub" id="to-title">TITLE</div>
 </div>
 
 <div id="boss-bar-wrap" style="display: none;">
-    <div id="boss-label">警告 — 大型機接近</div>
+    <div id="boss-label">WARNING — BOSS APPROACHING</div>
     <div id="boss-bar"><div id="boss-fill"></div></div>
 </div>
+
+<div id="challenge-time" style="display: none;">2:00</div>
 
 <div id="help-btn">？</div>
 
 <div id="ui-layer">
     <div class="panel">
-        <div class="score-row">スコア <span id="score-display">0</span>
-            <span class="level-chip">Lv <span id="level-display">1</span></span></div>
+        <div class="score-row">SCORE <span id="score-display">0</span>
+            <span class="level-chip">LV <span id="level-display">1</span></span></div>
         <div id="hp-bar"><div id="hp-fill"></div></div>
         <div class="mode-row">
-            <span id="mode-display" class="mode-name-sm">標準</span>
+            <span id="mode-display" class="mode-name-sm">STANDARD</span>
             <span class="trait-row-inline">
-                <span class="trait">防 <span id="trait-def" class="trait-val trait-mid">標準</span></span>
-                <span class="trait">連 <span id="trait-fire" class="trait-val trait-mid">標準</span></span>
-                <span class="trait">火 <span id="trait-pow" class="trait-val trait-mid">標準</span></span>
+                <span class="trait">DEF <span id="trait-def" class="trait-val trait-mid">MID</span></span>
+                <span class="trait">ROF <span id="trait-fire" class="trait-val trait-mid">MID</span></span>
+                <span class="trait">PWR <span id="trait-pow" class="trait-val trait-mid">MID</span></span>
             </span>
         </div>
-        <div class="sub-row">サブ: <span id="sub-name">なし</span></div>
+        <div class="sub-row">SUB: <span id="sub-name">NONE</span></div>
         <div id="subcd-bar"><div id="subcd-fill"></div></div>
+        <div class="gauge-row">
+            <span class="gauge-label">BOOST</span>
+            <div id="boost-bar"><div id="boost-fill"></div></div>
+        </div>
     </div>
 </div>
 
@@ -102,14 +115,14 @@
     <div id="virtual-stick"><div id="stick-knob"></div></div>
     <div class="btn-grid">
         <div class="btn-row">
-            <div class="m-btn" id="btn-sub">サブ武器</div>
-            <div class="m-btn" id="btn-blink">瞬間移動</div>
-            <div class="m-btn" id="btn-boost">ブースト</div>
+            <div class="m-btn" id="btn-sub">SUB</div>
+            <div class="m-btn" id="btn-blink">ZERO SHIFT</div>
+            <div class="m-btn" id="btn-boost">BOOST</div>
         </div>
         <div class="btn-row">
-            <div class="m-btn" id="btn-mode">モード</div>
-            <div class="m-btn" id="btn-lock">ロック</div>
-            <div class="m-btn" id="btn-fire">ショット</div>
+            <div class="m-btn" id="btn-mode">MODE</div>
+            <div class="m-btn" id="btn-lock">LOCK</div>
+            <div class="m-btn" id="btn-fire">FIRE</div>
         </div>
     </div>
 </div>

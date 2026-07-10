@@ -16,7 +16,7 @@
 <!-- 開始画面(要点のみ。詳しい説明はヘルプ画面に集約。最初のタップで音声を有効化して開始する) -->
 <div id="start-overlay">
     <div class="game-title">GRAVITY ZERO</div>
-    <div class="game-subtitle">3D フライトシューター</div>
+    <div class="game-subtitle">3D FLIGHT SHOOTER</div>
 
     <div class="quick-hints">
         <div><b>WASD</b> 移動 ・ <b>SPACE</b> ショット ・ <b>F</b> 長押しロックオン</div>
@@ -24,9 +24,12 @@
         <div>詳しい遊び方・キー設定はプレイ中の <b>？</b>(または <b>H</b>)から</div>
     </div>
 
-    <div class="start-btn">タップして開始</div>
+    <div class="start-btn">TAP TO START</div>
+    <div class="start-btn start-btn-sub" id="challenge-btn">CHALLENGE MODE<small>2 MIN / INVINCIBLE / SCORE ATTACK</small></div>
 
-    <div class="best-line">ベストスコア <span id="start-best">0</span></div>
+    <div class="level-select" id="level-select">START LEVEL <b id="start-level-val">1</b> ▸</div>
+
+    <div class="best-line">BEST SCORE <span id="start-best">0</span></div>
 </div>
 
 <!-- ヘルプ / 一時停止画面(遊び方の詳細とキー設定) -->
@@ -42,7 +45,7 @@
             <div class="guide-ctrl"><b>サブ武器</b><span><span class="key">R</span><br><small>スマホ: サブ武器</small></span></div>
             <div class="guide-ctrl"><b>一斉ロックオン</b><span><span class="key">F</span> 長押し→離す<br><small>スマホ: ロック</small></span></div>
             <div class="guide-ctrl"><b>ブースト</b><span><span class="key">E</span> 長押し<br><small>スマホ: ブースト</small></span></div>
-            <div class="guide-ctrl"><b>瞬間移動</b><span><span class="key">Q</span> + 方向<br><small>スマホ: 瞬間移動</small></span></div>
+            <div class="guide-ctrl"><b>ゼロシフト(瞬間移動)</b><span><span class="key">Q</span> + 方向<br><small>スマホ: ZERO SHIFT</small></span></div>
             <div class="guide-ctrl"><b>モード切替</b><span><span class="key">SHIFT</span><br><small>スマホ: モード</small></span></div>
             <div class="guide-ctrl"><b>ヘルプ / 一時停止</b><span><span class="key">H</span><br><small>スマホ: ？ボタン</small></span></div>
         </div>
@@ -76,17 +79,25 @@
 
 <!-- ゲームオーバー画面 -->
 <div id="gameover-overlay" style="display: none;">
-    <div class="game-title" style="color: #ff6655; text-shadow: 0 0 16px #f00;">GAME OVER</div>
-    <div class="game-subtitle">スコア <span id="final-score">0</span> ・ 撃破 <span id="final-kills">0</span></div>
-    <div class="game-subtitle" style="color: #fc6;">ベスト <span id="best-score">0</span></div>
-    <div class="start-btn">もう一度</div>
+    <div class="game-title" id="gameover-title" style="color: #ff6655; text-shadow: 0 0 16px #f00;">GAME OVER</div>
+    <div class="game-subtitle">SCORE <span id="final-score">0</span> ・ KILLS <span id="final-kills">0</span></div>
+    <div class="game-subtitle" style="color: #fc6;">BEST <span id="best-score">0</span></div>
+    <div id="ranking-box" style="display: none;">
+        <div class="rank-title">RANKING — TOP 5</div>
+        <ol id="ranking-list"></ol>
+    </div>
+    <div class="start-btn">RESTART</div>
+    <div class="start-btn start-btn-sub" id="to-title">TITLE</div>
 </div>
 
 <!-- ボスの耐久ゲージ(ボス戦中のみ表示) -->
 <div id="boss-bar-wrap" style="display: none;">
-    <div id="boss-label">警告 — 大型機接近</div>
+    <div id="boss-label">WARNING — BOSS APPROACHING</div>
     <div id="boss-bar"><div id="boss-fill"></div></div>
 </div>
+
+<!-- チャレンジモードの残り時間 -->
+<div id="challenge-time" style="display: none;">2:00</div>
 
 <!-- ヘルプ / 一時停止ボタン -->
 <div id="help-btn">？</div>
@@ -95,22 +106,27 @@
 <div id="ui-layer">
     <div class="panel">
         <div class="score-row">
-            スコア <span id="score-display">0</span>
-            <span class="level-chip">Lv <span id="level-display">1</span></span>
+            SCORE <span id="score-display">0</span>
+            <span class="level-chip">LV <span id="level-display">1</span></span>
         </div>
         <div id="hp-bar"><div id="hp-fill"></div></div>
 
         <div class="mode-row">
-            <span id="mode-display" class="mode-name-sm">標準</span>
+            <span id="mode-display" class="mode-name-sm">STANDARD</span>
             <span class="trait-row-inline">
-                <span class="trait">防 <span id="trait-def" class="trait-val trait-mid">標準</span></span>
-                <span class="trait">連 <span id="trait-fire" class="trait-val trait-mid">標準</span></span>
-                <span class="trait">火 <span id="trait-pow" class="trait-val trait-mid">標準</span></span>
+                <span class="trait">DEF <span id="trait-def" class="trait-val trait-mid">MID</span></span>
+                <span class="trait">ROF <span id="trait-fire" class="trait-val trait-mid">MID</span></span>
+                <span class="trait">PWR <span id="trait-pow" class="trait-val trait-mid">MID</span></span>
             </span>
         </div>
 
-        <div class="sub-row">サブ: <span id="sub-name">なし</span></div>
+        <div class="sub-row">SUB: <span id="sub-name">NONE</span></div>
         <div id="subcd-bar"><div id="subcd-fill"></div></div>
+
+        <div class="gauge-row">
+            <span class="gauge-label">BOOST</span>
+            <div id="boost-bar"><div id="boost-fill"></div></div>
+        </div>
     </div>
 </div>
 
@@ -124,14 +140,14 @@
     </div>
     <div class="btn-grid">
         <div class="btn-row">
-            <div class="m-btn" id="btn-sub" style="background: rgba(255, 102, 255, 0.2); border-color: #f6f;">サブ<br>武器</div>
-            <div class="m-btn" id="btn-blink" style="background: rgba(0, 255, 255, 0.2); border-color: #0ff;">瞬間<br>移動</div>
-            <div class="m-btn" id="btn-boost" style="background: rgba(255, 170, 0, 0.2); border-color: #fa0;">ブースト</div>
+            <div class="m-btn" id="btn-sub" style="background: rgba(255, 102, 255, 0.2); border-color: #f6f;">SUB</div>
+            <div class="m-btn" id="btn-blink" style="background: rgba(0, 255, 255, 0.2); border-color: #0ff;">ZERO<br>SHIFT</div>
+            <div class="m-btn" id="btn-boost" style="background: rgba(255, 170, 0, 0.2); border-color: #fa0;">BOOST</div>
         </div>
         <div class="btn-row">
-            <div class="m-btn" id="btn-mode">モード</div>
-            <div class="m-btn" id="btn-lock" style="background: rgba(0, 255, 0, 0.2); border-color: #0f0;">ロック</div>
-            <div class="m-btn" id="btn-fire" style="background: rgba(255, 50, 100, 0.2); border-color: #f36;">ショット</div>
+            <div class="m-btn" id="btn-mode">MODE</div>
+            <div class="m-btn" id="btn-lock" style="background: rgba(0, 255, 0, 0.2); border-color: #0f0;">LOCK</div>
+            <div class="m-btn" id="btn-fire" style="background: rgba(255, 50, 100, 0.2); border-color: #f36;">FIRE</div>
         </div>
     </div>
 </div>
