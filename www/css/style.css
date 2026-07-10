@@ -1,0 +1,592 @@
+/* ==========================================================
+   GRAVITY ZERO — 3D フライトシューター
+   画面レイアウトとUIのスタイル定義
+   ========================================================== */
+
+body, html {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #050510;
+    overflow: hidden;
+    font-family: 'Segoe UI', 'Hiragino Sans', 'Yu Gothic UI', sans-serif;
+    color: #fff;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+canvas {
+    display: block;
+}
+
+/* 3D描画キャンバス */
+#game-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+/* エフェクト用の2Dオーバーレイ(照準・集中線など) */
+#overlay-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* ---------- 情報パネル ---------- */
+#ui-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+.panel {
+    background: rgba(10, 20, 40, 0.7);
+    border: 1px solid rgba(0, 170, 255, 0.6);
+    border-radius: 8px;
+    padding: 10px 14px;
+    box-shadow: 0 4px 15px rgba(0, 170, 255, 0.15);
+    backdrop-filter: blur(4px);
+    pointer-events: auto;
+    max-width: 230px;
+}
+
+/* モード名と個性ラベルを1行にまとめる */
+.mode-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.mode-name-sm {
+    font-size: 14px;
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.trait-row-inline {
+    display: flex;
+    gap: 4px;
+    font-size: 10px;
+    color: #9ab;
+}
+
+.panel-title {
+    font-size: 12px;
+    color: #00aaff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 0 0 8px 0;
+    border-bottom: 1px solid rgba(0, 170, 255, 0.3);
+    padding-bottom: 4px;
+}
+
+.mode-name {
+    font-size: 22px;
+    font-weight: bold;
+    margin: 4px 0;
+    color: #fff;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+.note {
+    font-size: 11px;
+    color: #aaa;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.stats-row {
+    margin-top: 10px;
+    font-size: 10px;
+    color: #667;
+    border-top: 1px dashed #333;
+    padding-top: 5px;
+}
+
+/* スコアとレベル */
+.score-row {
+    font-size: 16px;
+    font-weight: bold;
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.level-chip {
+    font-size: 11px;
+    font-weight: normal;
+    color: #fc6;
+    border: 1px solid rgba(255, 204, 102, 0.5);
+    border-radius: 10px;
+    padding: 1px 8px;
+}
+
+/* モード固有の個性(防御・連射・火力) */
+.trait-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 10px;
+    color: #9ab;
+}
+
+.trait {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+
+.trait-val {
+    font-weight: bold;
+}
+
+.trait-good { color: #4dffb0; }
+.trait-mid  { color: #cdd; }
+.trait-bad  { color: #ff6a7a; }
+
+/* 耐久ゲージ */
+#hp-bar {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 70, 70, 0.2);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+#hp-fill {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, #f63, #fc3);
+    border-radius: 4px;
+    transition: width 0.15s ease-out;
+}
+
+/* サブ武器の表示とクールタイムゲージ */
+.sub-row {
+    margin-top: 10px;
+    font-size: 11px;
+    color: #9cf;
+}
+
+#subcd-bar {
+    margin-top: 4px;
+    width: 100%;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+#subcd-fill {
+    width: 0%;
+    height: 100%;
+    background: #f6f;
+    border-radius: 2px;
+}
+
+/* ---------- 操作ガイド(PC用) ---------- */
+.controls {
+    align-self: flex-end;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid #555;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #ccc;
+    text-align: right;
+    line-height: 2;
+}
+
+.key {
+    display: inline-block;
+    background: #eee;
+    color: #000;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: bold;
+    margin: 0 2px;
+    font-size: 11px;
+}
+
+/* ---------- モバイル操作 ---------- */
+#mobile-controls {
+    display: none;
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    width: 100%;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 0 20px;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+@media (max-width: 900px), (pointer: coarse) {
+    .controls { display: none; }
+    #mobile-controls { display: flex; }
+}
+
+#virtual-stick {
+    width: 120px;
+    height: 120px;
+    border-radius: 60px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+    pointer-events: auto;
+}
+
+#stick-knob {
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    background: rgba(0, 170, 255, 0.5);
+    position: absolute;
+    top: 38px;
+    left: 38px;
+}
+
+.btn-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-end;
+}
+
+.btn-row {
+    display: flex;
+    gap: 10px;
+}
+
+.m-btn {
+    background: rgba(0, 170, 255, 0.2);
+    border: 2px solid rgba(0, 170, 255, 0.5);
+    color: #fff;
+    width: 58px;
+    height: 58px;
+    border-radius: 29px;
+    font-size: 10px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.m-btn:active { filter: brightness(1.6); }
+
+/* ---------- ブリンク(瞬間移動)クールダウン表示 ---------- */
+#cooldown-bar {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 140px;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+#cooldown-fill {
+    width: 100%;
+    height: 100%;
+    background: #0ff;
+    border-radius: 3px;
+    transition: width 0.05s linear;
+}
+
+/* ---------- 開始画面・ヘルプ・ゲームオーバー画面 ---------- */
+#start-overlay,
+#help-overlay,
+#gameover-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0, 5, 15, 0.94);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 28px 16px;
+    box-sizing: border-box;
+    overflow-y: auto;       /* 説明が長い端末ではスクロールできるように */
+    z-index: 1000;
+}
+
+.game-title {
+    font-size: 34px;
+    font-weight: bold;
+    letter-spacing: 6px;
+    color: #fff;
+    text-shadow: 0 0 16px #0ff;
+    margin-bottom: 4px;
+    text-align: center;
+}
+
+.game-subtitle {
+    font-size: 13px;
+    color: #8ac;
+    letter-spacing: 2px;
+    text-align: center;
+}
+
+.start-btn {
+    flex: 0 0 auto;
+    padding: 14px 44px;
+    font-size: 18px;
+    color: #0ff;
+    background: transparent;
+    border: 2px solid #0ff;
+    border-radius: 5px;
+    letter-spacing: 3px;
+    box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+    transition: all 0.2s;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.start-btn:hover {
+    background: rgba(0, 255, 255, 0.15);
+    box-shadow: 0 0 25px rgba(0, 255, 255, 0.6);
+}
+
+#gameover-overlay {
+    background: rgba(20, 0, 5, 0.88);
+}
+
+/* ---------- タイトル画面の簡潔ヒント ---------- */
+.quick-hints {
+    font-size: 12px;
+    color: #9ab;
+    text-align: center;
+    line-height: 2.2;
+}
+
+.quick-hints b {
+    color: #dee;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-weight: bold;
+}
+
+.best-line {
+    font-size: 12px;
+    color: #fc6;
+    letter-spacing: 2px;
+}
+
+/* ---------- 遊び方カード ---------- */
+.guide-card {
+    width: 100%;
+    max-width: 440px;
+    background: rgba(10, 20, 40, 0.6);
+    border: 1px solid rgba(0, 170, 255, 0.35);
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-sizing: border-box;
+}
+
+.guide-heading {
+    font-size: 18px;
+    color: #0ff;
+    margin: 0 0 8px 0;
+    letter-spacing: 2px;
+}
+
+.guide-lead {
+    font-size: 12px;
+    color: #bcd;
+    line-height: 1.6;
+    margin: 0 0 14px 0;
+}
+
+.guide-sub {
+    font-size: 12px;
+    color: #7fd0ff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 16px 0 8px 0;
+    border-bottom: 1px solid rgba(0, 170, 255, 0.25);
+    padding-bottom: 4px;
+}
+
+.guide-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 14px;
+}
+
+.guide-ctrl {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
+    color: #cde;
+}
+
+.guide-ctrl b {
+    color: #fff;
+    white-space: nowrap;
+}
+
+.guide-ctrl span {
+    text-align: right;
+    color: #9ab;
+    line-height: 1.5;
+}
+
+.guide-ctrl small {
+    color: #667;
+    font-size: 9px;
+}
+
+.guide-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 11px;
+    color: #cde;
+    line-height: 1.7;
+}
+
+@media (max-width: 480px) {
+    .guide-grid { grid-template-columns: 1fr; }
+    .game-title { font-size: 26px; letter-spacing: 4px; }
+}
+
+/* ---------- ヘルプ / 一時停止ボタン ---------- */
+#help-btn {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    background: rgba(10, 20, 40, 0.7);
+    border: 1px solid rgba(0, 170, 255, 0.6);
+    color: #7fd0ff;
+    font-size: 20px;
+    font-weight: bold;
+    display: none;               /* ゲーム開始後にJSで表示 */
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    pointer-events: auto;
+    z-index: 900;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#help-btn:active { filter: brightness(1.5); }
+
+/* ---------- ボスの耐久ゲージ ---------- */
+#boss-bar-wrap {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(420px, 60%);
+    z-index: 500;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* 狭い画面ではHUDパネルと重ならないよう、パネルの下へ逃がす */
+@media (max-width: 999px) {
+    #boss-bar-wrap {
+        top: 170px;
+        width: min(320px, 70%);
+    }
+}
+
+#boss-label {
+    font-size: 11px;
+    color: #ff8095;
+    letter-spacing: 3px;
+    margin-bottom: 4px;
+    text-shadow: 0 0 8px rgba(255, 0, 40, 0.6);
+}
+
+#boss-bar {
+    height: 8px;
+    background: rgba(255, 60, 80, 0.15);
+    border: 1px solid rgba(255, 80, 100, 0.5);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+#boss-fill {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, #f34, #f8a);
+    transition: width 0.1s linear;
+}
+
+/* ---------- キー設定UI ---------- */
+.keyconfig-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 12px;
+    color: #cde;
+}
+
+.key-btn {
+    background: rgba(0, 170, 255, 0.12);
+    border: 1px solid rgba(0, 170, 255, 0.5);
+    color: #9df;
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    min-width: 130px;
+    font-family: inherit;
+}
+
+.key-btn:hover { background: rgba(0, 170, 255, 0.25); }
+
+.key-btn.listening {
+    border-color: #ff6;
+    color: #ffb;
+    animation: blinkKey 0.8s infinite;
+}
+
+@keyframes blinkKey {
+    50% { background: rgba(255, 255, 100, 0.2); }
+}
+
+.keyconfig-actions {
+    margin-top: 10px;
+    text-align: right;
+}

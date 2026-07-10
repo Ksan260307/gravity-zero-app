@@ -1,0 +1,18 @@
+{
+  "appId": "com.example.gravityzero",
+  "appName": "GRAVITY ZERO",
+  "webDir": "www",
+  "backgroundColor": "#050510",
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "never"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "backgroundColor": "#050510",
+      "launchShowDuration": 1000
+    }
+  }
+}

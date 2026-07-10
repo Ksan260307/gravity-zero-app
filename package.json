@@ -1,0 +1,22 @@
+{
+  "name": "gravity-zero",
+  "version": "1.0.0",
+  "description": "無重力空間の慣性操作を楽しむ3Dフライトシューター",
+  "private": true,
+  "scripts": {
+    "serve": "npx serve www",
+    "android:add": "npx cap add android",
+    "ios:add": "npx cap add ios",
+    "sync": "npx cap sync",
+    "android:open": "npx cap open android",
+    "ios:open": "npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/ios": "^6.0.0"
+  }
+}
