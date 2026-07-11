@@ -209,41 +209,6 @@ canvas {
     border-radius: 2px;
 }
 
-/* ブーストエネルギーのゲージ */
-.gauge-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 8px;
-}
-
-.gauge-label {
-    font-size: 9px;
-    color: #9ab;
-    letter-spacing: 1px;
-    min-width: 36px;
-}
-
-#boost-bar {
-    flex: 1;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 2px;
-    overflow: hidden;
-}
-
-#boost-fill {
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, #06f, #0cf);
-    border-radius: 2px;
-    transition: width 0.08s linear;
-}
-
-/* 残量が少ないときは赤系にして枯渇を知らせる */
-#boost-fill.boost-low {
-    background: linear-gradient(90deg, #f43, #fa4);
-}
 
 /* ---------- 操作ガイド(PC用) ---------- */
 .controls {
@@ -479,6 +444,21 @@ canvas {
     text-shadow: 0 0 10px rgba(255, 170, 0, 0.6);
     z-index: 900;
     pointer-events: none;
+}
+
+/* ---------- ニューレコード表示 ---------- */
+#new-record {
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 4px;
+    color: #ffcc55;
+    text-shadow: 0 0 12px rgba(255, 170, 0, 0.8);
+    animation: record-pulse 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes record-pulse {
+    from { opacity: 0.65; transform: scale(1); }
+    to   { opacity: 1;    transform: scale(1.08); }
 }
 
 /* ---------- ランキング ---------- */

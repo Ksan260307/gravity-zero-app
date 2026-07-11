@@ -15,6 +15,7 @@ export class SoundEngine {
         this.arpeggioIndex = 0;
         this.lastArpTime = 0;
         this.lastDashTime = 0;
+        this.lastExplosionTime = -999; // 爆発音の間引き用(連鎖爆発での飽和防止)
         this.beamNodes = null; // 照射ビームの持続音(再生中のみ保持)
     }
 
@@ -160,9 +161,13 @@ export class SoundEngine {
         osc.stop(this.ctx.currentTime + 0.05);
     }
 
-    /** 爆発音:高速な周波数変調でノイズ的な質感を出す */
+    /** 爆発音:高速な周波数変調でノイズ的な質感を出す
+     *  連鎖爆発(ボス断末魔など)で音が飽和しないよう最小間隔で間引く。
+     *  戻り値は実際に鳴らしたかどうか。 */
     playExplosion() {
-        if (!this.isInitialized) return;
+        if (!this.isInitialized) return false;
+        if (this.ctx.currentTime - this.lastExplosionTime < 0.12) return false;
+        this.lastExplosionTime = this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
         const filter = this.ctx.createBiquadFilter();
@@ -193,6 +198,7 @@ export class SoundEngine {
         mod.start();
         osc.stop(this.ctx.currentTime + 0.5);
         mod.stop(this.ctx.currentTime + 0.5);
+        return true;
     }
 
     /** ブースト(連続再生を抑制) */

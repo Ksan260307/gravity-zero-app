@@ -34,19 +34,40 @@ const BLINK_COOLDOWN = 0.6;   // ゼロシフトの再使用待ち時間(秒)
 // ---------- ブースト ----------
 // 方向キーと組み合わせるとその向きへ強くダッシュし、
 // 何も押していなければ前方(画面奥)へ突き進む感覚を出す。
-// 消費エネルギー制にして、押しっぱなしの無敵ばかりにならないよう制限する。
+// 押している間だけ効くシンプルな加速(無敵・エネルギー制なし)。
 const BOOST_FORCE_MULT = 3.6;   // ブースト中の推力倍率(方向ダッシュの効き)
 const BOOST_DRAG_MULT = 0.55;   // ブースト中は抵抗を弱めて最高速を伸ばす
 const BOOST_FLOW_EXTRA = 4.0;   // ブースト中に加わる前方の流速(星・岩が一気に流れる)
-const BOOST_MAX = 100;          // ブーストエネルギーの最大値
-const BOOST_DRAIN = 60;         // ブースト中の毎秒消費(満タンから約1.7秒)
-const BOOST_RECHARGE = 34;      // 非ブースト時の毎秒回復
+
+// ---------- ロックオン ----------
+const VOLLEY_FREEZE = 0.12;     // 一斉発射後の硬直(旧0.3。テンポ優先で短縮)
+const VOLLEY_COUNT = 24;        // 一斉発射の本数(ロック数に関わらず固定)
+const LASER_DAMAGE = 0.6;       // 追尾レーザー1発の威力(旧2.0の約3割)
+
+// ---------- ウィスプ(支援ビット) ----------
+const WISP_KILLS_PER = 100;     // この撃破数ごとに1機加わる
+const WISP_MAX = 3;             // 同時装備の上限
+const WISP_FIRE_INTERVAL = 1.0; // 各ウィスプの発射間隔(秒)
+const WISP_OFFSETS = [{ x: -28, y: 14 }, { x: 28, y: 14 }, { x: 0, y: 30 }]; // 機体からの定位置
+
+// ---------- グレイズ ----------
+const GRAZE_SCORE = 15;         // 敵すれすれ通過のボーナス点(敵1機につき1回)
+const GRAZE_PAD = 26;           // 接触半径の外側、この幅までがグレイズ帯
+
+// ---------- ショット進化 ----------
+const TWIN_SHOT_KILLS = 15;     // この撃破数でツインショット(横2列)へ
+const TRIPLE_SHOT_KILLS = 40;   // この撃破数でトリプルショット(横3列)へ
+
+// ---------- コンボ ----------
+const COMBO_WINDOW = 2.5;       // この秒数以内に撃破を続けるとボーナスが伸びる
 
 // ---------- ゲームルール定数 ----------
 const PLAYER_MAX_HP = 100;    // 機体の耐久値
 const COLLISION_DAMAGE = 25;  // 敵と接触したときのダメージ
 const HIT_INVINCIBLE_TIME = 1.5; // 被弾直後の無敵時間(秒)
 const SCORE_PER_LEVEL = 1500; // レベルが1上がるのに必要なスコア
+const PLAYER_HIT_RADIUS = 9;  // 自機の実効当たり判定(見た目より小さめ=回避が気持ちいい)
+const ENEMY_COMMIT_Z = -120;  // 敵はこれより手前でホーミングをやめ、軌道を確定させる
 
 // ---------- サブ武器定数 ----------
 const BEAM_RADIUS = 11;       // 照射ビームの有効半径
@@ -173,7 +194,6 @@ class PlayerCraft {
         this.visualPitch = 0;  // 縦移動に応じた機首の上下
 
         this.isBoosting = false;
-        this.boostEnergy = BOOST_MAX;  // ブーストの残りエネルギー
         this.blinkCooldown = 0;
         this.freezeTimer = 0;      // レーザー発射後の硬直
         this.hitInvincible = 0;    // 被弾直後の無敵時間
@@ -259,14 +279,9 @@ class PlayerCraft {
     update(dt, input, mode) {
         const game = this.game;
 
-        // ---------- ブースト(エネルギーを消費して高速移動) ----------
-        this.isBoosting = input.boost && this.freezeTimer <= 0 && this.boostEnergy > 0;
-        if (this.isBoosting) {
-            this.boostEnergy = Math.max(0, this.boostEnergy - BOOST_DRAIN * dt);
-            game.audio.playBoost();
-        } else {
-            this.boostEnergy = Math.min(BOOST_MAX, this.boostEnergy + BOOST_RECHARGE * dt);
-        }
+        // ---------- ブースト(押している間だけ加速) ----------
+        this.isBoosting = input.boost && this.freezeTimer <= 0;
+        if (this.isBoosting) game.audio.playBoost();
 
         // ---------- 一斉ロックオン ----------
         if (input.lock) {
@@ -294,15 +309,18 @@ class PlayerCraft {
             if (this.lockedTargets.length > 0) {
                 game.audio.playVolley();
 
-                this.lockedTargets.forEach(target => {
+                // ロック数に関わらず固定24本を撃ち、対象へ順繰りに振り分ける
+                // (少ないロックには弾が集中し、多いロックには広く行き渡る)
+                for (let i = 0; i < VOLLEY_COUNT; i++) {
+                    const target = this.lockedTargets[i % this.lockedTargets.length];
                     if (target && target.active) {
                         game.spawnHomingLaser(this.pos, this.vel, target);
                     }
-                    target.locked = false;
-                });
+                }
+                this.lockedTargets.forEach(target => { target.locked = false; });
 
                 // 発射の反動として短い硬直を入れ、メリハリをつける
-                this.freezeTimer = 0.3;
+                this.freezeTimer = VOLLEY_FREEZE;
                 game.jerkIntensity = 1.0;
                 game.triggerSpeedLines(20);
             }
@@ -312,9 +330,13 @@ class PlayerCraft {
         this.wasLocking = input.lock;
 
         // ---------- 硬直 ----------
+        // 入力は封じるが、速度は完全ゼロにせず強めの減衰に留める。
+        // (再加速が遅い重装で「完全停止の罰」が重くなりすぎるのを防ぎ、慣性の余韻を残す)
         if (this.freezeTimer > 0) {
             this.freezeTimer -= dt;
-            this.vel.set(0, 0, 0);
+            const damp = Math.max(0, 1 - dt * 10);
+            this.vel.x *= damp;
+            this.vel.y *= damp;
             input.x = 0;
             input.y = 0;
             input.boost = false;
@@ -381,10 +403,11 @@ class PlayerCraft {
         this.pos.y += this.vel.y * dt;
 
         // 移動限界では軽く跳ね返して行き止まり感を和らげる
-        if (this.pos.x < -BOUND_X) { this.pos.x = -BOUND_X; this.vel.x *= -0.5; }
-        if (this.pos.x >  BOUND_X) { this.pos.x =  BOUND_X; this.vel.x *= -0.5; }
-        if (this.pos.y < -BOUND_Y) { this.pos.y = -BOUND_Y; this.vel.y *= -0.5; }
-        if (this.pos.y >  BOUND_Y) { this.pos.y =  BOUND_Y; this.vel.y *= -0.5; }
+        // (反発は弱め:ブーストで壁に当たっても大きく弾き返されない)
+        if (this.pos.x < -BOUND_X) { this.pos.x = -BOUND_X; this.vel.x *= -0.25; }
+        if (this.pos.x >  BOUND_X) { this.pos.x =  BOUND_X; this.vel.x *= -0.25; }
+        if (this.pos.y < -BOUND_Y) { this.pos.y = -BOUND_Y; this.vel.y *= -0.25; }
+        if (this.pos.y >  BOUND_Y) { this.pos.y =  BOUND_Y; this.vel.y *= -0.25; }
 
         // ---------- 姿勢(バンクとピッチ) ----------
         // 横速度に応じて自然に傾き、止まると水平に戻る
@@ -429,7 +452,9 @@ class Game {
         this.input = { x: 0, y: 0, fire: false, modeSwitch: false, boost: false, blink: false, lock: false, sub: false };
         this.audio = new SoundEngine();
 
-        this.state = 'playing';   // 'playing' | 'gameover'
+        // 'title' | 'playing' | 'paused' | 'gameover'
+        // 起動直後はタイトル状態にして、開始画面の裏でゲームが進まないようにする
+        this.state = 'title';
         this.currentModeIndex = 1;
         this.score = 0;
         this.level = 1;
@@ -441,6 +466,12 @@ class Game {
         this.enemyIdCounter = 0;
         this.lastFireTime = 0;
         this.spawnTimer = 0.5;
+        this.shotLevel = 1;       // 1=シングル 2=ツイン 3=トリプル(撃破数で進化)
+        this.combo = 0;           // 連続撃破コンボ数
+        this.comboTimer = 0;      // コンボの残り猶予時間
+        this.wispCount = 0;       // 装備中のウィスプ数(100機撃破ごとに+1、最大3)
+        this.wispFireTimer = 0;   // ウィスプの次弾発射までの時間
+        this.grazeFlash = 0;      // グレイズ演出の残り表示時間
 
         // ボス戦の進行管理
         this.bossTime = 0;
@@ -526,6 +557,11 @@ class Game {
         // URLに ?debug が付いていればデバッグパネルを開いた状態で起動する
         if (location.search.includes('debug')) this.toggleDebug();
 
+        // F2:デバッグパネルの表示切替(タイトル画面でも効くよう起動時に登録する)
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'F2') this.toggleDebug();
+        });
+
         // タブが隠れたら自動で一時停止する(見ていない間の被弾を防ぐ)
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && this.state === 'playing') this.openHelp();
@@ -592,6 +628,7 @@ class Game {
 
         this.buildBoss();
         this.buildShockwave();
+        this.buildWisps();
         this.buildStarfield();
         this.buildDebris();
         this.buildParticles();
@@ -726,6 +763,20 @@ class Game {
         this.shockwaveLife = 1;
         this.shockwave.scale.setScalar(12);
         this.shockwave.visible = true;
+    }
+
+    /** ウィスプ(機体に追従する支援ビット)。装備数ぶんだけ表示する */
+    buildWisps() {
+        this.wisps = [];
+        const geo = new THREE.OctahedronGeometry(4);
+        for (let i = 0; i < WISP_MAX; i++) {
+            const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+                color: 0x66ffee, transparent: true, opacity: 0.9,
+            }));
+            mesh.visible = false;
+            this.scene.add(mesh);
+            this.wisps.push(mesh);
+        }
     }
 
     // ---------- オブジェクトプール ----------
@@ -872,8 +923,6 @@ class Game {
 
         window.addEventListener('keydown', (e) => {
             const b = this.keyBindings;
-            // F2:デバッグパネルの表示切替(いつでも受け付ける)
-            if (e.code === 'F2') { this.toggleDebug(); return; }
             // ヘルプ / 一時停止のトグル(停止中でも受け付ける)
             if (e.code === b.help) { this.toggleHelp(); return; }
             // 一時停止中はゲーム操作を無視する
@@ -1048,6 +1097,9 @@ class Game {
         this.hp = Math.max(0, this.hp - dealt);
         this.updateHpBar();
         this.player.hitInvincible = HIT_INVINCIBLE_TIME;
+        // 被弾すると連続撃破コンボは途切れる
+        this.combo = 0;
+        this.comboTimer = 0;
         this.jerkIntensity = 1.0;
         // 大ダメージほど画面が大きく揺れ、フラッシュも強くなる
         this.shakeIntensity = Math.min(1.5, 0.6 + dealt / 25);
@@ -1098,11 +1150,16 @@ class Game {
         const bestKey = isChallenge ? CHALLENGE_BEST_STORAGE : BEST_STORAGE;
         let best = 0;
         try { best = parseInt(localStorage.getItem(bestKey) || '0', 10) || 0; } catch (e) { /* 読めなければ0扱い */ }
-        if (this.score > best) {
+        const isNewRecord = this.score > best && this.score > 0;
+        if (isNewRecord) {
             best = this.score;
             try { localStorage.setItem(bestKey, String(best)); } catch (e) { /* 保存不可でも続行 */ }
         }
         document.getElementById('best-score').innerText = best;
+
+        // ベスト更新の祝福表示
+        const recordEl = document.getElementById('new-record');
+        if (recordEl) recordEl.style.display = isNewRecord ? 'block' : 'none';
 
         // ランキングは通常モードのみ記録・表示する
         if (isChallenge) {
@@ -1211,6 +1268,14 @@ class Game {
         this.shakeIntensity = 0;
         this.damageFlash = 0;
         this.spawnTimer = 0.8;
+        this.shotLevel = 1;
+        this.combo = 0;
+        this.comboTimer = 0;
+        this.wispCount = 0;
+        this.wispFireTimer = 0;
+        this.grazeFlash = 0;
+        this.wisps.forEach(w => { w.visible = false; });
+        this.updateWispUI();
 
         const p = this.player;
         p.pos.set(0, 0, 0);
@@ -1220,7 +1285,6 @@ class Game {
         p.visualPitch = 0;
         p.freezeTimer = 0;
         p.blinkCooldown = 0;
-        p.boostEnergy = BOOST_MAX;
         p.isBoosting = false;
         p.hitInvincible = 0;
         p.wasLocking = false;
@@ -1287,7 +1351,7 @@ class Game {
         document.getElementById('score-display').innerText = '0';
         document.getElementById('level-display').innerText = this.level;
         document.getElementById('hp-fill').style.width = '100%';
-        document.getElementById('boost-fill').style.width = '100%';
+        this.updateGunUI();
         const subName = document.getElementById('sub-name');
         subName.innerText = 'NONE';
         subName.style.color = '';
@@ -1350,7 +1414,7 @@ class Game {
             Math.sin(phi) * Math.cos(theta) * initialSpeed + shipVel.x * 0.5,
             Math.sin(phi) * Math.sin(theta) * initialSpeed + shipVel.y * 0.5,
             -Math.cos(phi) * initialSpeed,
-            target, 0, 4, 2
+            target, 0, 4, LASER_DAMAGE
         );
     }
 
@@ -1424,13 +1488,58 @@ class Game {
         this.jerkIntensity = Math.min(1.0, this.jerkIntensity + 0.15);
 
         if (awardScore) {
-            this.addScore(e.size > 12 ? 200 : 100);
+            // 連続撃破コンボ:猶予時間内に倒し続けるとボーナスが伸びる(最大+100%)
+            this.combo++;
+            this.comboTimer = COMBO_WINDOW;
+            const mult = 1 + Math.min(this.combo - 1, 10) * 0.1;
+            this.addScore(Math.round((e.size > 12 ? 200 : 100) * mult));
             this.killCount++;
+            this.updateShotLevel();
+            this.updateWispCount();
 
             // サブ武器アイテムのドロップ(未所持のときは出やすくする)
             const dropChance = this.player.subWeapon ? 0.08 : 0.25;
             if (Math.random() < dropChance) this.spawnItem(e.mesh.position);
         }
+    }
+
+    /** 撃破数に応じてショットが進化する(15機でツイン、40機でトリプル) */
+    updateShotLevel() {
+        const newLevel = this.killCount >= TRIPLE_SHOT_KILLS ? 3
+            : this.killCount >= TWIN_SHOT_KILLS ? 2 : 1;
+        if (newLevel > this.shotLevel) {
+            this.shotLevel = newLevel;
+            this.updateGunUI();
+            this.audio.playPickup();
+            this.jerkIntensity = 1.0;
+            this.triggerSpeedLines(15);
+        }
+    }
+
+    updateGunUI() {
+        const el = document.getElementById('gun-level');
+        if (!el) return;
+        el.innerText = this.shotLevel === 3 ? 'TRIPLE' : this.shotLevel === 2 ? 'TWIN' : 'SINGLE';
+        el.style.color = this.shotLevel === 3 ? '#ffcc55' : this.shotLevel === 2 ? '#7fd0ff' : '';
+    }
+
+    /** 100機撃破ごとにウィスプが1機加わる(最大3機) */
+    updateWispCount() {
+        const target = Math.min(WISP_MAX, Math.floor(this.killCount / WISP_KILLS_PER));
+        if (target > this.wispCount) {
+            this.wispCount = target;
+            this.updateWispUI();
+            this.audio.playPickup();
+            this.jerkIntensity = 1.0;
+            this.triggerSpeedLines(15);
+        }
+    }
+
+    updateWispUI() {
+        const el = document.getElementById('wisp-count');
+        if (!el) return;
+        el.innerText = this.wispCount > 0 ? `×${this.wispCount}` : 'NONE';
+        el.style.color = this.wispCount > 0 ? '#66ffee' : '';
     }
 
     /**
@@ -1451,6 +1560,7 @@ class Game {
         enemy.kind = kind;
         enemy.wavePhase = Math.random() * Math.PI * 2;
         enemy.fireTimer = 1.2 + Math.random() * 0.8;
+        enemy.grazed = false;
 
         enemy.id = ++this.enemyIdCounter;
         enemy.size = Math.random() * 8 + 8;
@@ -2034,6 +2144,7 @@ class Game {
         this.jerkIntensity = Math.max(0, this.jerkIntensity - dt * 5);
         this.shakeIntensity = Math.max(0, this.shakeIntensity - dt * 3);
         this.damageFlash = Math.max(0, this.damageFlash - dt * 2);
+        this.grazeFlash = Math.max(0, this.grazeFlash - dt * 1.5);
 
         this.updateCamera(dt);
     }
@@ -2053,14 +2164,29 @@ class Game {
             }
         }
 
+        // ---------- コンボの継続判定 ----------
+        if (this.comboTimer > 0) {
+            this.comboTimer -= dt;
+            if (this.comboTimer <= 0) this.combo = 0;
+        }
+
         // ---------- 通常弾の発射(モードごとに連射間隔が変わる) ----------
         if (this.input.fire && player.freezeTimer <= 0 && performance.now() - this.lastFireTime > mode.fireInterval) {
-            const bullet = this.bullets.get();
-            if (bullet) {
+            // 撃破数に応じて1〜3列の平行ショットになる
+            const offsets = this.shotLevel === 3 ? [-12, 0, 12]
+                : this.shotLevel === 2 ? [-7, 7] : [0];
+            let fired = false;
+            for (const off of offsets) {
+                const bullet = this.bullets.get();
+                if (!bullet) break;
                 bullet.mesh.position.copy(player.pos);
+                bullet.mesh.position.x += off;
                 bullet.mesh.position.z -= 18;
                 bullet.vel.set(player.vel.x * 0.2, player.vel.y * 0.2, -BULLET_SPEED);
                 bullet.mesh.visible = true;
+                fired = true;
+            }
+            if (fired) {
                 this.lastFireTime = performance.now();
                 this.audio.playShot();
             }
@@ -2073,6 +2199,38 @@ class Game {
                 b.mesh.visible = false;
             }
         });
+
+        // ---------- ウィスプ(機体に追従し、1秒ごとに前方へ単発弾) ----------
+        for (let i = 0; i < WISP_MAX; i++) {
+            const wisp = this.wisps[i];
+            const equipped = i < this.wispCount;
+            wisp.visible = equipped;
+            if (!equipped) continue;
+            // 定位置へ少し遅れて追従し、ふわふわと上下する
+            const off = WISP_OFFSETS[i];
+            const bob = Math.sin(performance.now() * 0.004 + i * 2.1) * 4;
+            const follow = Math.min(1, dt * 8);
+            wisp.position.x += (player.pos.x + off.x - wisp.position.x) * follow;
+            wisp.position.y += (player.pos.y + off.y + bob - wisp.position.y) * follow;
+            wisp.position.z = player.pos.z + 6;
+            wisp.rotation.x += dt * 2;
+            wisp.rotation.y += dt * 3;
+        }
+        if (this.wispCount > 0) {
+            this.wispFireTimer -= dt;
+            if (this.wispFireTimer <= 0) {
+                this.wispFireTimer = WISP_FIRE_INTERVAL;
+                for (let i = 0; i < this.wispCount; i++) {
+                    const bullet = this.bullets.get();
+                    if (!bullet) break;
+                    bullet.mesh.position.copy(this.wisps[i].position);
+                    bullet.mesh.position.z -= 10;
+                    bullet.vel.set(0, 0, -BULLET_SPEED);
+                    bullet.mesh.visible = true;
+                }
+                this.audio.playShot();
+            }
+        }
 
         // ---------- サブ武器 ----------
         this.updateSubWeapon(dt);
@@ -2092,23 +2250,30 @@ class Game {
         }
 
         // ---------- 敵の更新と衝突判定 ----------
-        const isInvincible = player.isBoosting || player.blinkCooldown > 0 ||
+        // (ブーストの無敵は廃止:ゼロシフト直後・硬直中・被弾直後のみ無敵)
+        const isInvincible = player.blinkCooldown > 0 ||
                              player.freezeTimer > 0 || player.hitInvincible > 0;
         const steer = Math.min(80, 28 + (this.level - 1) * 5);
         const beamRangeSq = (r) => r * r;
 
         this.enemies.forEachActive(e => {
-            // 自機方向へ緩やかに寄せて、正面に絡む機会を増やす
-            e.vel.x += Math.sign(player.pos.x - e.mesh.position.x) * steer * dt;
-            e.vel.y += Math.sign(player.pos.y - e.mesh.position.y) * steer * dt;
-            e.vel.x = Math.max(-90, Math.min(90, e.vel.x));
-            e.vel.y = Math.max(-90, Math.min(90, e.vel.y));
+            // 自機の近くでは軌道を確定させ、直前の吸い付き・横っ飛びをなくす
+            // (プレイヤーが敵の進路を読んで回避できるようにする)
+            const committed = e.mesh.position.z > ENEMY_COMMIT_Z;
+
+            if (!committed) {
+                // 自機方向へ緩やかに寄せて、正面に絡む機会を増やす
+                e.vel.x += Math.sign(player.pos.x - e.mesh.position.x) * steer * dt;
+                e.vel.y += Math.sign(player.pos.y - e.mesh.position.y) * steer * dt;
+                e.vel.x = Math.max(-90, Math.min(90, e.vel.x));
+                e.vel.y = Math.max(-90, Math.min(90, e.vel.y));
+            }
 
             // ---------- 種類ごとの挙動 ----------
             if (e.kind === 'weave') {
-                // 蛇行型:左右へ大きく揺れながら接近する
+                // 蛇行型:左右へ大きく揺れながら接近する(近距離では直進に移る)
                 e.wavePhase += dt * 3;
-                e.vel.x = Math.sin(e.wavePhase) * 130;
+                if (!committed) e.vel.x = Math.sin(e.wavePhase) * 130;
             } else if (e.kind === 'gunner') {
                 // 砲撃型:遠距離から自機を狙って単発弾を撃つ
                 e.fireTimer -= dt;
@@ -2177,12 +2342,24 @@ class Game {
                 }
             }
 
-            // 自機との衝突(ブースト・ブリンク直後・硬直中・被弾直後は無敵)
-            if (e.active && !isInvincible) {
-                const r = e.size + 12;
+            // 自機との衝突(チャレンジモードは無敵なので、敵を消さずすり抜ける)
+            // 自機側の判定は見た目より小さめ(PLAYER_HIT_RADIUS)にして回避を快適にする
+            if (e.active && !isInvincible && this.gameMode !== 'challenge') {
+                const r = e.size + PLAYER_HIT_RADIUS;
                 if (e.mesh.position.distanceToSquared(player.pos) < r * r) {
                     this.destroyEnemy(e, false); // 接触破壊はスコアにしない
                     this.damagePlayer(COLLISION_DAMAGE);
+                }
+            }
+
+            // グレイズ:敵すれすれを通過するとボーナス(敵1機につき1回)
+            if (e.active && !e.grazed) {
+                const gr = e.size + PLAYER_HIT_RADIUS + GRAZE_PAD;
+                if (e.mesh.position.distanceToSquared(player.pos) < gr * gr) {
+                    e.grazed = true;
+                    this.addScore(GRAZE_SCORE);
+                    this.grazeFlash = 0.6;
+                    this.triggerSpeedLines(3);
                 }
             }
         });
@@ -2242,7 +2419,11 @@ class Game {
                 s.mesh.visible = false;
                 return;
             }
-            if (!isInvincible && sp.distanceToSquared(player.pos) < 16 * 16) {
+            // チャレンジモードでは敵弾もすり抜ける(消さない)
+            // 被弾半径は自機の実効判定+弾の大きさぶん
+            const hitR = PLAYER_HIT_RADIUS + 5;
+            if (!isInvincible && this.gameMode !== 'challenge' &&
+                sp.distanceToSquared(player.pos) < hitR * hitR) {
                 s.active = false;
                 s.mesh.visible = false;
                 this.damagePlayer(BOSS_SHOT_DAMAGE);
@@ -2299,11 +2480,6 @@ class Game {
         // ---------- HUDゲージの更新 ----------
         const blinkRatio = Math.max(0, Math.min(1, 1 - player.blinkCooldown / BLINK_COOLDOWN));
         document.getElementById('cooldown-fill').style.width = (blinkRatio * 100) + '%';
-
-        // ブーストエネルギー(残量が少ないと色を落として枯渇を知らせる)
-        const boostEl = document.getElementById('boost-fill');
-        boostEl.style.width = (player.boostEnergy / BOOST_MAX * 100) + '%';
-        boostEl.classList.toggle('boost-low', player.boostEnergy < BOOST_MAX * 0.25);
 
         let subRatio = 0;
         if (player.subWeapon) {
@@ -2392,6 +2568,23 @@ class Game {
             ctx.fillText(`LOCK ${player.lockedTargets.length}`, w / 2, h * 0.72);
         }
 
+        // グレイズ表示(すれすれ回避の瞬間だけ光る)
+        if (this.grazeFlash > 0.01) {
+            ctx.fillStyle = `rgba(120, 255, 230, ${Math.min(1, this.grazeFlash)})`;
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`GRAZE +${GRAZE_SCORE}`, w / 2, h * 0.62);
+        }
+
+        // コンボ表示(2連続以上で表示、猶予時間が減ると薄くなる)
+        if (this.combo >= 2 && this.state === 'playing') {
+            const alpha = Math.max(0.25, Math.min(1, this.comboTimer / COMBO_WINDOW));
+            ctx.fillStyle = `rgba(255, 210, 90, ${alpha})`;
+            ctx.font = 'bold 20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`COMBO ×${this.combo}`, w / 2, h * 0.3);
+        }
+
         // 集中線:画面中央から外へ走る線で加速の衝撃を伝える
         const cx = w / 2;
         const cy = h / 2;
@@ -2443,7 +2636,12 @@ window.ZMF = {
         BOSS_FIRST_SCORE, BOSS_SCORE_INTERVAL, BOSS_SHOT_SPEED, BOSS_SHOT_DAMAGE,
         BOSS_BONUS_SCORE, REPAIR_HEAL,
         ITEM_PICKUP_RADIUS, ITEM_MAGNET_RANGE, CHALLENGE_TIME,
-        BOOST_FORCE_MULT, BOOST_DRAG_MULT, BOOST_FLOW_EXTRA, BOOST_MAX, BOOST_DRAIN, BOOST_RECHARGE,
+        BOOST_FORCE_MULT, BOOST_DRAG_MULT, BOOST_FLOW_EXTRA,
+        VOLLEY_FREEZE, TWIN_SHOT_KILLS, TRIPLE_SHOT_KILLS, COMBO_WINDOW,
+        VOLLEY_COUNT, LASER_DAMAGE,
+        WISP_KILLS_PER, WISP_MAX, WISP_FIRE_INTERVAL,
+        GRAZE_SCORE, GRAZE_PAD,
+        PLAYER_HIT_RADIUS, ENEMY_COMMIT_Z,
     },
     storageKeys: {
         keys: KEYS_STORAGE, best: BEST_STORAGE,

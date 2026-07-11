@@ -15,6 +15,9 @@ function runAll() {
     const M = Z.FLIGHT_MODES;
     const C = Z.constants;
 
+    // 起動直後の状態を記録してから開始する(タイトル状態の検証用)
+    const stateAtBoot = g.state;
+
     // キー入力系のテストのために、開始処理(入力リスナー登録)を済ませておく
     const startBtn = document.querySelector('#start-overlay .start-btn');
     if (startBtn && document.getElementById('start-overlay').style.display !== 'none') {
@@ -60,6 +63,7 @@ function runAll() {
         e.id = ++g.enemyIdCounter;
         e.size = size; e.hp = hp; e.locked = false;
         e.kind = 'rush'; // プール再利用で前の種類が残らないようにする
+        e.grazed = true; // グレイズは専用テストでのみ有効化する(他テストへの混入防止)
         e.mesh.position.set(x, y, z); e.vel.set(0, 0, 0);
         e.mesh.scale.setScalar(size); e.mesh.visible = true;
         e.mesh.material = g.enemyMats[0]; e.colorHex = '#ff3366';
@@ -185,7 +189,8 @@ function runAll() {
         check('前方円錐内の3機をロックする', g.player.lockedTargets.length === 3, `ロック=${g.player.lockedTargets.length}`);
         g.input.lock = false;
         step(1);
-        check('ボタンを離すとロック数ぶん発射される', countActive(g.homingLasers) === 3, `弾=${countActive(g.homingLasers)}`);
+        check('ボタンを離すと固定24発が発射される', countActive(g.homingLasers) === C.VOLLEY_COUNT,
+            `弾=${countActive(g.homingLasers)}`);
         check('発射後に短い硬直に入る', g.player.freezeTimer > 0, `freeze=${g.player.freezeTimer.toFixed(2)}`);
     });
 
@@ -309,11 +314,12 @@ function runAll() {
             g.destroyEnemy(small);
         });
         check('小型撃破で100点', g.score === 100, `score=${g.score}`);
+        g.reset(); // コンボの影響を切ってから大型を検証する
         withRandom(0.999, () => {
             const big = spawnEnemy(0, 0, -300, 1, 15);
             g.destroyEnemy(big);
         });
-        check('大型撃破で+200点', g.score === 300, `score=${g.score}`);
+        check('大型撃破で200点', g.score === 200, `score=${g.score}`);
 
         // レベルに応じた敵の強化(決定論的にスポーンさせて確認)
         g.reset();
@@ -487,10 +493,10 @@ function runAll() {
 
         g.reset(); setMode(1);
         placeBossShot(0, 0, 0);
-        g.input.boost = true;
+        g.player.blinkCooldown = C.BLINK_COOLDOWN; // ゼロシフト直後の無敵
         step(1);
-        check('無敵中(ブースト)はボス弾を受けない', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
-        g.input.boost = false;
+        check('無敵中(ゼロシフト直後)はボス弾を受けない', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        g.player.blinkCooldown = 0;
     });
 
     // =========================================================
@@ -833,6 +839,18 @@ function runAll() {
         g.damagePlayer(25);
         check('チャレンジ中は被弾しない(無敵)', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
 
+        // すり抜け:接触しても敵は消えず(タダで処理できない)、敵弾も消えない
+        g.player.hitInvincible = 0;
+        const eC = spawnEnemy(0, 0, 0);
+        placeBossShot(0, 0, 0);
+        step(1);
+        check('敵に接触しても敵が消えない(すり抜け)', eC.active === true && g.hp === C.PLAYER_MAX_HP,
+            `active=${eC.active} hp=${g.hp}`);
+        check('敵弾もすり抜けて消えない', countActive(g.enemyShots) === 1,
+            `shots=${countActive(g.enemyShots)}`);
+        eC.active = false; eC.mesh.visible = false;
+        g.enemyShots.forEachActive(s => { s.active = false; s.mesh.visible = false; });
+
         step(60);
         check('時間が経過で減る', g.challengeTimeLeft < C.CHALLENGE_TIME - 0.9,
             `t=${g.challengeTimeLeft.toFixed(1)}`);
@@ -880,21 +898,20 @@ function runAll() {
     });
 
     // =========================================================
-    group('ブースト(前方 / 方向ダッシュ)', () => {
+    group('ブースト(押している間だけ加速・無敵/ゲージなし)', () => {
         // 方向キー+ブーストで、通常移動より明確に速く加速する
         g.reset(); setMode(1);
-        g.player.boostEnergy = C.BOOST_MAX;
         g.input.x = 1; g.input.y = 0; g.input.boost = false;
         step(8);
         const normalVx = g.player.vel.x;
 
         g.reset(); setMode(1);
-        g.player.boostEnergy = C.BOOST_MAX;
         g.input.x = 1; g.input.y = 0; g.input.boost = true;
         step(8);
         const boostVx = g.player.vel.x;
         check('方向キー+ブーストで通常より高速に加速する', boostVx > normalVx * 1.5,
             `normal=${normalVx.toFixed(0)} boost=${boostVx.toFixed(0)}`);
+        check('エネルギー制は廃止されている', g.player.boostEnergy === undefined);
         g.input.boost = false; g.input.x = 0;
 
         // 方向キーなしのブーストは前方の流れ(星)を加速させる
@@ -902,81 +919,34 @@ function runAll() {
         g.jerkIntensity = 0;
         const starPos = g.stars.geometry.attributes.position;
         starPos.setZ(0, -100);
-        g.input.x = 0; g.input.y = 0; g.input.boost = false; g.player.boostEnergy = C.BOOST_MAX;
+        g.input.x = 0; g.input.y = 0; g.input.boost = false;
         step(1);
         const dNo = starPos.getZ(0) - (-100);
 
         g.jerkIntensity = 0;
         starPos.setZ(0, -100);
-        g.input.boost = true; g.player.boostEnergy = C.BOOST_MAX;
+        g.input.boost = true;
         step(1);
         const dBoost = starPos.getZ(0) - (-100);
         check('方向キーなしでも前方の流れが速くなる(前方高速移動)', dBoost > dNo * 1.5,
             `noboost=${dNo.toFixed(1)} boost=${dBoost.toFixed(1)}`);
+
+        // 押しっぱなしでも切れない(時間制限なし)
+        step(300); // 5秒間押しっぱなし
+        check('押している間はずっと加速し続けられる', g.player.isBoosting === true);
         g.input.boost = false;
 
-        // ブースト中は無敵(接触しても被弾しない)
+        // 無敵は廃止:ブースト中でも被弾する
         g.reset(); setMode(1);
-        g.player.boostEnergy = C.BOOST_MAX;
+        g.player.hitInvincible = 0;
         g.input.boost = true;
         spawnEnemy(0, 0, 0);
         step(1);
-        check('ブースト中は接触しても被弾しない', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
-        g.input.boost = false;
-    });
-
-    // =========================================================
-    group('ブーストのエネルギー制', () => {
-        g.reset();
-        check('初期はエネルギー満タン', g.player.boostEnergy === C.BOOST_MAX, `e=${g.player.boostEnergy}`);
-
-        g.input.boost = true;
-        step(30); // 約0.5秒
-        const afterUse = g.player.boostEnergy;
-        check('ブースト中は消費する', afterUse < C.BOOST_MAX, `e=${afterUse.toFixed(1)}`);
-
-        g.input.boost = false;
-        step(60); // 約1秒回復
-        check('離すと回復する', g.player.boostEnergy > afterUse, `e=${g.player.boostEnergy.toFixed(1)}`);
-
-        // 使い切ったら発動できない
-        g.player.boostEnergy = 0;
-        g.input.boost = true;
-        step(1);
-        check('エネルギー切れではブーストしない', g.player.isBoosting === false);
+        check('ブースト中でも被弾する(無敵廃止)', g.hp < C.PLAYER_MAX_HP, `hp=${g.hp}`);
         g.input.boost = false;
 
-        // フル使用でも一定時間で枯渇する(無限ブースト無敵の防止)
-        g.reset();
-        g.input.boost = true;
-        let frames = 0;
-        step(1); frames++; // 1フレーム目でブースト開始(isBoostingが立つ)
-        check('押しっぱなしでブーストが始まる', g.player.isBoosting === true);
-        while (g.player.isBoosting && frames < 600) { step(1); frames++; }
-        check('押しっぱなしでも数秒で枯渇する', frames > 60 && frames < 200, `frames=${frames}`);
-        g.input.boost = false;
-        g.reset();
-    });
-
-    // =========================================================
-    group('ブーストゲージ表示', () => {
-        g.reset();
-        step(1);
-        check('満タン時はゲージ100%',
-            parseFloat(document.getElementById('boost-fill').style.width) === 100,
-            `w=${document.getElementById('boost-fill').style.width}`);
-
-        g.input.boost = true;
-        step(45);
-        g.input.boost = false;
-        step(1);
-        const w = parseFloat(document.getElementById('boost-fill').style.width);
-        check('消費するとゲージが減る', w < 100, `w=${w}`);
-
-        g.player.boostEnergy = C.BOOST_MAX * 0.1;
-        step(1);
-        check('残量が少ないと低残量スタイルになる',
-            document.getElementById('boost-fill').classList.contains('boost-low'));
+        // ゲージUIが撤去されている
+        check('ブーストゲージのUIが無い', !document.getElementById('boost-fill'));
         g.reset();
     });
 
@@ -997,6 +967,280 @@ function runAll() {
         const pwrChip2 = document.getElementById('trait-pow').parentElement;
         check('HEAVY表示でもPWRチップが枠内に収まる',
             pwrChip2.getBoundingClientRect().right <= panel.getBoundingClientRect().right + 0.5);
+        g.reset();
+    });
+
+    // =========================================================
+    group('起動時はタイトル状態', () => {
+        check('起動直後はtitle状態で、タイトルの裏でゲームが進まない',
+            stateAtBoot === 'title', `state=${stateAtBoot}`);
+    });
+
+    // =========================================================
+    group('ショット進化(撃破数でツイン/トリプル)', () => {
+        g.reset();
+        check('初期はシングルショット', g.shotLevel === 1 &&
+            document.getElementById('gun-level').innerText === 'SINGLE');
+
+        g.lastFireTime = 0; g.input.fire = true; step(1); g.input.fire = false;
+        check('シングルでは1発だけ発射', countActive(g.bullets) === 1, `弾=${countActive(g.bullets)}`);
+
+        // 15機目の撃破でツインへ
+        g.reset();
+        g.killCount = C.TWIN_SHOT_KILLS - 1;
+        withRandom(0.99, () => g.destroyEnemy(spawnEnemy(0, 0, -300, 1)));
+        check('15機撃破でツインショットへ進化', g.shotLevel === 2, `kills=${g.killCount}`);
+        check('HUD表示がTWINになる', document.getElementById('gun-level').innerText === 'TWIN');
+
+        g.lastFireTime = 0; g.input.fire = true; step(1); g.input.fire = false;
+        check('ツインでは2発が同時発射', countActive(g.bullets) === 2, `弾=${countActive(g.bullets)}`);
+        const xs = [];
+        g.bullets.forEachActive(b => xs.push(b.mesh.position.x));
+        check('2発は左右へ分かれて並ぶ', xs.length === 2 && xs[0] !== xs[1], `xs=${xs.map(x => x.toFixed(0))}`);
+
+        // 40機目の撃破でトリプルへ
+        g.reset();
+        g.killCount = C.TRIPLE_SHOT_KILLS - 1;
+        withRandom(0.99, () => g.destroyEnemy(spawnEnemy(0, 0, -300, 1)));
+        check('40機撃破でトリプルショットへ進化', g.shotLevel === 3, `kills=${g.killCount}`);
+        check('HUD表示がTRIPLEになる', document.getElementById('gun-level').innerText === 'TRIPLE');
+
+        g.lastFireTime = 0; g.input.fire = true; step(1); g.input.fire = false;
+        check('トリプルでは3発が同時発射', countActive(g.bullets) === 3, `弾=${countActive(g.bullets)}`);
+
+        g.reset();
+        check('リスタートでシングルへ戻る', g.shotLevel === 1 &&
+            document.getElementById('gun-level').innerText === 'SINGLE');
+    });
+
+    // =========================================================
+    group('連続撃破コンボ', () => {
+        g.reset();
+        withRandom(0.99, () => {
+            g.destroyEnemy(spawnEnemy(0, 0, -300, 1));
+            g.destroyEnemy(spawnEnemy(0, 0, -300, 1));
+        });
+        check('連続撃破でコンボが増える', g.combo === 2, `combo=${g.combo}`);
+        check('2機目からボーナスが乗る(100+110点)', g.score === 210, `score=${g.score}`);
+
+        step(Math.ceil(C.COMBO_WINDOW * 60) + 5);
+        check('時間が空くとコンボが途切れる', g.combo === 0, `combo=${g.combo}`);
+
+        withRandom(0.99, () => g.destroyEnemy(spawnEnemy(0, 0, -300, 1)));
+        check('途切れた後は1から再開する', g.combo === 1);
+
+        setMode(1);
+        g.player.hitInvincible = 0;
+        g.damagePlayer(10);
+        check('被弾でコンボが途切れる', g.combo === 0, `combo=${g.combo}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('ロックオン後の硬直短縮', () => {
+        check('硬直時間の定数が短縮されている(0.3 → 0.12)', C.VOLLEY_FREEZE === 0.12,
+            `freeze=${C.VOLLEY_FREEZE}`);
+        g.reset();
+        spawnEnemy(0, 0, -300);
+        g.input.lock = true;
+        step(30);
+        g.input.lock = false;
+        step(1);
+        check('発射直後の硬直が短い', g.player.freezeTimer > 0 && g.player.freezeTimer <= C.VOLLEY_FREEZE,
+            `freeze=${g.player.freezeTimer.toFixed(3)}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('効果音のスパム防止', () => {
+        const a = g.audio;
+        if (!a.isInitialized) {
+            check('(音声が未初期化のため検証をスキップ)', true);
+            return;
+        }
+        a.lastExplosionTime = -999;
+        const p1 = a.playExplosion();
+        const p2 = a.playExplosion();
+        check('爆発音は最小間隔(0.12秒)で間引かれる', p1 === true && p2 === false,
+            `p1=${p1} p2=${p2}`);
+    });
+
+    // =========================================================
+    group('ウィスプ(支援ビット)', () => {
+        g.reset();
+        check('初期はウィスプなし', g.wispCount === 0 &&
+            document.getElementById('wisp-count').innerText === 'NONE');
+
+        // 100機目の撃破で1機目を装備する
+        g.killCount = C.WISP_KILLS_PER - 1;
+        withRandom(0.99, () => g.destroyEnemy(spawnEnemy(0, 0, -300, 1)));
+        check('100機撃破で1機装備', g.wispCount === 1, `wisp=${g.wispCount}`);
+        check('HUD表示が ×1 になる', document.getElementById('wisp-count').innerText === '×1');
+
+        step(1);
+        check('装備したウィスプだけが表示される',
+            g.wisps[0].visible === true && g.wisps[1].visible === false && g.wisps[2].visible === false);
+        check('1秒ごとに単発弾を撃つ(装備直後の初弾)', countActive(g.bullets) === 1,
+            `弾=${countActive(g.bullets)}`);
+        check('発射後はタイマーが約1秒に再設定される',
+            g.wispFireTimer > 0.9 && g.wispFireTimer <= C.WISP_FIRE_INTERVAL,
+            `t=${g.wispFireTimer.toFixed(2)}`);
+
+        step(30);
+        const d = g.wisps[0].position.distanceTo(g.player.pos);
+        check('機体の近くに追従する', d < 60, `d=${d.toFixed(0)}`);
+
+        // 300機撃破で3機到達、各機が1発ずつ撃つ
+        g.reset();
+        g.killCount = C.WISP_KILLS_PER * 3 - 1;
+        withRandom(0.99, () => g.destroyEnemy(spawnEnemy(0, 0, -300, 1)));
+        check('300機撃破で3機に到達', g.wispCount === 3, `wisp=${g.wispCount}`);
+        g.bullets.forEachActive(b => { b.active = false; b.mesh.visible = false; });
+        g.wispFireTimer = 0;
+        step(1);
+        check('3機がそれぞれ1発ずつ撃つ', countActive(g.bullets) === 3, `弾=${countActive(g.bullets)}`);
+
+        // 上限は3機
+        g.killCount = C.WISP_KILLS_PER * 5;
+        withRandom(0.99, () => g.destroyEnemy(spawnEnemy(0, 0, -300, 1)));
+        check('最大3機を超えない', g.wispCount === C.WISP_MAX, `wisp=${g.wispCount}`);
+
+        g.reset();
+        check('リスタートで解除される', g.wispCount === 0 && g.wisps[0].visible === false &&
+            document.getElementById('wisp-count').innerText === 'NONE');
+    });
+
+    // =========================================================
+    group('ロックオンレーザーの新仕様(固定24発・威力3割)', () => {
+        check('威力が約3割へ引き下げ(2.0 → 0.6)', C.LASER_DAMAGE === 0.6, `dmg=${C.LASER_DAMAGE}`);
+        check('発射本数は24で固定', C.VOLLEY_COUNT === 24, `n=${C.VOLLEY_COUNT}`);
+
+        // 2ロックでも24発、対象へ均等に振り分けられる
+        g.reset();
+        const eA = spawnEnemy(-40, 0, -300, 999);
+        const eB = spawnEnemy(40, 0, -300, 999);
+        g.input.lock = true;
+        step(30);
+        g.input.lock = false;
+        step(1);
+        check('2ロックでも24発発射される', countActive(g.homingLasers) === C.VOLLEY_COUNT,
+            `弾=${countActive(g.homingLasers)}`);
+        let atA = 0, atB = 0;
+        g.homingLasers.forEachActive(l => {
+            if (l.target === eA) atA++;
+            else if (l.target === eB) atB++;
+        });
+        check('レーザーが対象へ均等に振り分けられる', atA === 12 && atB === 12, `A=${atA} B=${atB}`);
+
+        // 1発の威力では耐久1の敵も一撃で落ちない
+        g.reset();
+        const e = spawnEnemy(0, 0, -300, 1);
+        g.launchProjectile(g.homingLasers, 0, 0, -300, 0, 0, 0, e, 0, 4, C.LASER_DAMAGE);
+        step(1);
+        check('威力0.6では耐久1を一撃で倒せない', e.active && approx(e.hp, 0.4, 0.01),
+            `hp=${e.hp.toFixed(2)} active=${e.active}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('グレイズ(すれすれ回避ボーナス)', () => {
+        g.reset(); setMode(1);
+        g.player.hitInvincible = 0;
+        // 接触半径(size10+自機9=19)の外・グレイズ帯(+26=45)の内に敵を置く
+        const e = spawnEnemy(40, 0, 0);
+        e.grazed = false;
+        step(1);
+        check('すれすれ通過でボーナス点が入る', g.score === C.GRAZE_SCORE, `score=${g.score}`);
+        check('被弾はしていない', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        check('グレイズ演出が光る', g.grazeFlash > 0, `flash=${g.grazeFlash.toFixed(2)}`);
+
+        step(1);
+        check('同じ敵からは1回だけ', g.score === C.GRAZE_SCORE, `score=${g.score}`);
+        e.active = false; e.mesh.visible = false;
+        g.reset();
+    });
+
+    // =========================================================
+    group('ニューレコード表示', () => {
+        localStorage.removeItem(Z.storageKeys.best);
+        g.gameMode = 'normal';
+        g.reset();
+        g.addScore(500);
+        g.gameOver();
+        check('ベスト更新時に NEW RECORD が表示される',
+            document.getElementById('new-record').style.display !== 'none');
+
+        g.reset();
+        g.addScore(10);
+        g.gameOver();
+        check('更新できなければ表示されない',
+            document.getElementById('new-record').style.display === 'none');
+        g.reset();
+    });
+
+    // =========================================================
+    group('遊びやすさ調整: 敵の軌道確定(近距離ホーミング停止)', () => {
+        g.reset();
+        // 遠距離(z < -120)ではホーミングが働く
+        const far = spawnEnemy(0, 100, -300);
+        step(1);
+        check('遠距離では自機へ寄ってくる', far.vel.y < 0, `vy=${far.vel.y.toFixed(2)}`);
+        far.active = false; far.mesh.visible = false;
+
+        // 近距離(z > -120)では軌道が確定し、吸い付かない
+        const near = spawnEnemy(0, 100, -60);
+        step(1);
+        check('近距離ではホーミングしない(回避が読める)', near.vel.y === 0, `vy=${near.vel.y}`);
+        near.active = false; near.mesh.visible = false;
+
+        // 蛇行型も近距離では横っ飛びをやめて直進する
+        const wv = g.spawnEnemyUnit('weave');
+        wv.mesh.position.set(0, 100, -60);
+        wv.vel.set(50, 0, 0);
+        wv.grazed = true;
+        step(1);
+        check('蛇行型も近距離では直進に移る', wv.vel.x === 50, `vx=${wv.vel.x}`);
+        wv.active = false; wv.mesh.visible = false;
+        g.reset();
+    });
+
+    // =========================================================
+    group('遊びやすさ調整: 当たり判定の縮小', () => {
+        check('自機の実効判定は半径9', C.PLAYER_HIT_RADIUS === 9, `r=${C.PLAYER_HIT_RADIUS}`);
+
+        // 旧判定(22)なら接触していた距離21では、新判定(19)では当たらない
+        g.reset(); setMode(1);
+        g.player.hitInvincible = 0;
+        const e = spawnEnemy(21, 0, 0);
+        step(1);
+        check('距離21(旧判定なら被弾)ではかすらない', g.hp === C.PLAYER_MAX_HP && e.active,
+            `hp=${g.hp} active=${e.active}`);
+
+        // 新判定の内側ではきちんと当たる
+        e.mesh.position.set(15, 0, 0);
+        step(1);
+        check('判定内(距離15)では被弾する', g.hp < C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('遊びやすさ調整: 硬直と壁の手触り', () => {
+        // 硬直中は速度がゼロにならず、減衰しながら滑る(慣性の余韻)
+        g.reset(); setMode(1);
+        g.player.vel.set(400, 0, 0);
+        g.player.freezeTimer = 0.1;
+        step(1);
+        check('硬直中も慣性が残る(完全停止しない)',
+            g.player.vel.x > 0 && g.player.vel.x < 400, `vx=${g.player.vel.x.toFixed(0)}`);
+
+        // 壁の反発は弱め(-25%)
+        g.reset(); setMode(1);
+        g.player.pos.x = C.BOUND_X;
+        g.player.vel.x = 200;
+        step(1);
+        check('壁の反発が穏やか(強く弾き返されない)',
+            g.player.vel.x < 0 && Math.abs(g.player.vel.x) <= 200 * 0.3,
+            `vx=${g.player.vel.x.toFixed(0)}`);
         g.reset();
     });
 
