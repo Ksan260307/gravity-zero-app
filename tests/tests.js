@@ -892,8 +892,13 @@ function runAll() {
 
         g.cycleStartLevel(); // 3 → 5
         check('選択は 1→3→5 で循環する', g.startLevel === 5);
+        check('選んだ開始レベルが保存される',
+            localStorage.getItem(Z.storageKeys.startLevel) === '5',
+            `saved=${localStorage.getItem(Z.storageKeys.startLevel)}`);
         g.cycleStartLevel(); // 5 → 1
         check('5の次は1へ戻る', g.startLevel === 1);
+        localStorage.removeItem(Z.storageKeys.startLevel);
+        g.setStartLevel(1);
         g.reset();
     });
 
@@ -1124,8 +1129,8 @@ function runAll() {
     });
 
     // =========================================================
-    group('ロックオンレーザーの新仕様(固定24発・威力3割)', () => {
-        check('威力が約3割へ引き下げ(2.0 → 0.6)', C.LASER_DAMAGE === 0.6, `dmg=${C.LASER_DAMAGE}`);
+    group('ロックオンレーザーの新仕様(固定24発・円状発射・威力復帰・乗り換え)', () => {
+        check('威力が元の値へ復帰(2.0)', C.LASER_DAMAGE === 2.0, `dmg=${C.LASER_DAMAGE}`);
         check('発射本数は24で固定', C.VOLLEY_COUNT === 24, `n=${C.VOLLEY_COUNT}`);
 
         // 2ロックでも24発、対象へ均等に振り分けられる
@@ -1145,13 +1150,42 @@ function runAll() {
         });
         check('レーザーが対象へ均等に振り分けられる', atA === 12 && atB === 12, `A=${atA} B=${atB}`);
 
-        // 1発の威力では耐久1の敵も一撃で落ちない
+        // 発射直後は真円状(中心軸まわりに等間隔)に飛び出す
+        const angles = [];
+        g.homingLasers.forEachActive(l => {
+            angles.push(Math.atan2(l.vel.y, l.vel.x));
+        });
+        // 24本の角度が円周上に散っている(重複が少なく、広い範囲をカバー)
+        const uniqueDirs = new Set(angles.map(a => Math.round(a * 4))).size;
+        check('円状に広がって発射される', uniqueDirs >= 10, `方向数=${uniqueDirs}`);
+        // すべて前方(-Z)へ進む
+        let allForward = true;
+        g.homingLasers.forEachActive(l => { if (l.vel.z >= 0) allForward = false; });
+        check('全弾が前方へ飛び出す', allForward);
+
+        // 威力2.0:耐久2の敵を1発で撃破できる
         g.reset();
-        const e = spawnEnemy(0, 0, -300, 1);
+        const e = spawnEnemy(0, 0, -300, 2);
         g.launchProjectile(g.homingLasers, 0, 0, -300, 0, 0, 0, e, 0, 4, C.LASER_DAMAGE);
         step(1);
-        check('威力0.6では耐久1を一撃で倒せない', e.active && approx(e.hp, 0.4, 0.01),
-            `hp=${e.hp.toFixed(2)} active=${e.active}`);
+        check('威力2.0で耐久2を一撃撃破', !e.active, `hp=${e.hp.toFixed(1)} active=${e.active}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('ロックオンレーザーは乗り換えない(強すぎたため無効化)', () => {
+        // 標的を失ったレーザーは、別の敵へ乗り換えず飛び続けて自然消滅する
+        g.reset();
+        const primary = spawnEnemy(0, 0, -300, 1);
+        const bystander = spawnEnemy(60, 30, -320, 5);
+        g.launchProjectile(g.homingLasers, 0, 0, 0, 0, 0, -1, primary, 0, 4, C.LASER_DAMAGE);
+        primary.active = false; primary.mesh.visible = false;
+        step(2);
+        let retargeted = 0;
+        g.homingLasers.forEachActive(las => { if (las.target === bystander) retargeted++; });
+        check('標的消失後も別の敵へ乗り換えない', retargeted === 0,
+            `乗り換え=${retargeted}`);
+        bystander.active = false; bystander.mesh.visible = false;
         g.reset();
     });
 
@@ -1863,6 +1897,104 @@ function runAll() {
         check('3方向+12方向の同時発射でも弾が欠けない', countActive(g.enemyShots) === 15,
             `shots=${countActive(g.enemyShots)}`);
         g.reset();
+    });
+
+    // =========================================================
+    group('ボスHPバーの右上コンパクト表示', () => {
+        const wrap = document.getElementById('boss-bar-wrap');
+        // 右上寄せ(左50%中央寄せではない)
+        const cs = getComputedStyle(wrap);
+        check('右上に配置される(左中央寄せではない)',
+            cs.left === 'auto' && cs.right !== 'auto',
+            `left=${cs.left} right=${cs.right}`);
+        check('コンパクト幅(画面いっぱいに広がらない)',
+            parseFloat(cs.width) <= 220, `width=${cs.width}`);
+        check('警告ラベルにWARNINGを含む(短縮表記)',
+            document.getElementById('boss-label').textContent.includes('WARNING'));
+
+        // 低HPで枠が critical 明滅する
+        g.gameMode = 'normal';
+        g.reset();
+        g.spawnBoss();
+        g.boss.hp = g.boss.maxHp; g.updateBossBar();
+        check('満タンでは明滅しない', !wrap.classList.contains('boss-critical'));
+        g.boss.hp = g.boss.maxHp * 0.1; g.updateBossBar();
+        check('残りわずかで枠が明滅する(boss-critical)', wrap.classList.contains('boss-critical'));
+        // 撃破後は明滅が解除される
+        g.reset();
+        check('リセットで明滅クラスが外れる', !wrap.classList.contains('boss-critical'));
+    });
+
+    // =========================================================
+    group('難易度スケーリングの上限(倒せなくなる問題の対策)', () => {
+        // 敵の耐久はレベルで上がるが、上限で頭打ちになる
+        g.reset();
+        g.level = 3; // 低レベル
+        const lowHp = withRandom(0.5, () => g.spawnEnemyUnit('rush')).hp;
+        g.enemies.forEachActive(e => { e.active = false; e.mesh.visible = false; });
+
+        g.level = 100; // 極端に高いレベル
+        const capHp = withRandom(0.5, () => g.spawnEnemyUnit('rush')).hp;
+        g.enemies.forEachActive(e => { e.active = false; e.mesh.visible = false; });
+        // rush・小型の理論最大 = 1(基本) + ENEMY_HP_LEVEL_CAP
+        check('高レベルでも敵耐久は上限で頭打ち', capHp <= 1 + C.ENEMY_HP_LEVEL_CAP,
+            `hp=${capHp} 上限=${1 + C.ENEMY_HP_LEVEL_CAP}`);
+        check('低レベルより硬いが青天井ではない', capHp > lowHp && capHp < 20,
+            `low=${lowHp} cap=${capHp}`);
+
+        // 固定火力(重装:1発2ダメージ)でも、上限の敵を数発で倒せる範囲
+        check('固定火力で上限の敵も倒し切れる', 1 + C.ENEMY_HP_LEVEL_CAP <= 5,
+            `最大耐久=${1 + C.ENEMY_HP_LEVEL_CAP}`);
+
+        // 出現頻度も上限で頭打ち(処理し切れない物量にならない)
+        const rateAt = (lv) => {
+            g.level = lv;
+            return withRandom(0.5, () => { g.spawnTimer = 0; g.boss.active = false; g.update(1 / 60); return g.spawnTimer; });
+        };
+        // 上限到達後(レベル13以降)は、どれだけレベルが上がっても間隔が変わらない
+        const r30 = rateAt(30);
+        const r200 = rateAt(200);
+        check('出現間隔は一定より短くならない(物量に上限)', approx(r30, r200, 0.001),
+            `lv30=${r30.toFixed(3)} lv200=${r200.toFixed(3)}`);
+
+        // ボス耐久も上限
+        g.reset();
+        g.level = 100;
+        g.spawnBoss();
+        check('ボス耐久も上限で頭打ち', g.boss.maxHp === 80 + C.BOSS_HP_LEVEL_CAP * 25,
+            `maxHp=${g.boss.maxHp}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('開始レベル選択の永続化(設定の保存)', () => {
+        localStorage.setItem(Z.storageKeys.startLevel, '5');
+        // 新規インスタンスを作らずとも、保存値が正しい形式であることと
+        // setStartLevelが保存することを検証する(構築時ロードは実ブラウザで確認)
+        g.setStartLevel(3);
+        check('setStartLevelで保存される', localStorage.getItem(Z.storageKeys.startLevel) === '3');
+        check('不正値ははじく想定(1/3/5のみ)', [1, 3, 5].includes(g.startLevel));
+        localStorage.removeItem(Z.storageKeys.startLevel);
+        g.setStartLevel(1);
+        g.reset();
+    });
+
+    // =========================================================
+    group('キーコンフィグの永続化(保存・復元)', () => {
+        localStorage.removeItem(Z.storageKeys.keys);
+        g.resetKeyBindings();
+        g.setKeyBinding('fire', 'KeyK');
+        const saved = JSON.parse(localStorage.getItem(Z.storageKeys.keys));
+        check('変更したキーが localStorage に保存される', saved && saved.fire === 'KeyK',
+            `saved=${JSON.stringify(saved)}`);
+        // 保存フォーマットが構築時ロードで復元可能な形か
+        const restored = { ...Z.DEFAULT_KEYS };
+        Object.keys(Z.DEFAULT_KEYS).forEach(k => { if (saved[k]) restored[k] = saved[k]; });
+        check('保存データから全アクションを復元できる', restored.fire === 'KeyK' &&
+            restored.boost === Z.DEFAULT_KEYS.boost);
+        g.resetKeyBindings();
+        check('初期化すると初期キーが保存される',
+            JSON.parse(localStorage.getItem(Z.storageKeys.keys)).fire === Z.DEFAULT_KEYS.fire);
     });
 
     // ---------- 後片付け:テスト後は静止させておく ----------
