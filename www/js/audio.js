@@ -62,9 +62,11 @@ export class SoundEngine {
         });
     }
 
-    /** BGMの装飾音(アルペジオ)を一定間隔で鳴らす */
+    /** BGMの装飾音(アルペジオ)を一定間隔で鳴らす
+     *  一時停止などでコンテキストが止まっている間は予約しない
+     *  (停止中に溜まったノードが再開時に一斉再生されるのを防ぐ) */
     updateBGM(timeMs) {
-        if (!this.isInitialized || !this.ctx) return;
+        if (!this.isInitialized || !this.ctx || this.ctx.state !== 'running') return;
         if (timeMs - this.lastArpTime > 150) {
             this.playArpNote();
             this.lastArpTime = timeMs;
@@ -372,6 +374,32 @@ export class SoundEngine {
             osc.start(t);
             osc.stop(t + 0.17);
         }
+    }
+
+    /** グラビティウェル:深く沈み込むピッチダウンで「吸い込まれる」印象を作る */
+    playGravity() {
+        if (!this.isInitialized) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        const filter = this.ctx.createBiquadFilter();
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, this.ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(30, this.ctx.currentTime + 0.7);
+
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(900, this.ctx.currentTime);
+        filter.frequency.exponentialRampToValueAtTime(120, this.ctx.currentTime + 0.7);
+
+        gain.gain.setValueAtTime(0.18, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.7);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        osc.start();
+        osc.stop(this.ctx.currentTime + 0.7);
     }
 
     /** ブリンク(瞬間移動):急激なピッチダウンでドップラー風の効果 */

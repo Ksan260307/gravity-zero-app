@@ -432,6 +432,31 @@ canvas {
 
 .level-select b { color: #fff; }
 
+/* ---------- フリーフライトのEXITボタン ---------- */
+#free-exit {
+    position: absolute;
+    top: 16px;
+    right: 70px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 18px;
+    font-size: 13px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #9df;
+    border: 1px solid rgba(0, 170, 255, 0.5);
+    border-radius: 16px;
+    background: rgba(10, 20, 40, 0.6);
+    cursor: pointer;
+    pointer-events: auto;
+    z-index: 900;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#free-exit:hover { background: rgba(0, 170, 255, 0.2); }
+
 /* ---------- チャレンジモードの残り時間 ---------- */
 #challenge-time {
     position: absolute;

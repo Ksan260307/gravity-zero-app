@@ -30,6 +30,9 @@ const MAX_LOCKS = 18;         // 同時ロック上限
 const LOCK_CONE_COS = 0.75;   // ロック可能な前方円錐(約41度)
 const BLINK_DIST = 80;        // ゼロシフト(短距離瞬間移動)の移動距離
 const BLINK_COOLDOWN = 0.6;   // ゼロシフトの再使用待ち時間(秒)
+// 無敵はクールダウンとは別の短いタイマーにする。
+// (クールダウン全体を無敵にすると、連打で常時無敵になる悪用ができてしまう)
+const BLINK_INVINCIBLE = 0.15; // ゼロシフト直後の無敵時間(秒)
 
 // ---------- ブースト ----------
 // 方向キーと組み合わせるとその向きへ強くダッシュし、
@@ -77,13 +80,24 @@ const COMET_SPEED = 900;      // 誘導弾の速度
 const MISSILE_SPEED = 650;    // 追尾ミサイルの巡航速度
 const MISSILE_COUNT = 10;     // ミサイルの一斉発射数
 
+// グラビティウェル:前方へ射出→停留し、敵を吸い込む重力球(ボスには効かない)
+const WELL_TRAVEL_SPEED = 380;    // 射出時の前進速度
+const WELL_ANCHOR_Z = -430;       // ここまで進むと停留する
+const WELL_DURATION = 3;          // 停留して吸引する時間(秒)
+const WELL_PULL_RADIUS = 240;     // 吸引が効く半径
+const WELL_PULL_ACCEL = 900;      // 吸引の強さ(中心に近いほど強い)
+const WELL_DAMAGE_RADIUS = 70;    // 継続ダメージの半径
+const WELL_DPS = 8;               // 中心部の毎秒ダメージ
+const WELL_SHOT_EAT_RADIUS = 150; // 敵弾を飲み込む半径
+
 // サブ武器の定義(アイテムで入手し、メインショットと同時に使える)
 const SUB_WEAPONS = {
     halberd: { name: 'HALBERD', cooldown: 5,  cssColor: '#66ffff', color: 0x66ffff },
     comet:   { name: 'COMET',   cooldown: 1,  cssColor: '#ff66ff', color: 0xff66ff },
     missile: { name: 'HOMING MISSILE', cooldown: 10, cssColor: '#ffaa33', color: 0xffaa33 },
+    gravity: { name: 'GRAVITY WELL', cooldown: 8, cssColor: '#cc88ff', color: 0xcc88ff },
 };
-const ITEM_TYPES = ['halberd', 'comet', 'missile'];
+const ITEM_TYPES = ['halberd', 'comet', 'missile', 'gravity'];
 
 // ---------- ボス戦定数 ----------
 const BOSS_FIRST_SCORE = 2000;     // 最初のボスが出現するスコア
@@ -128,6 +142,92 @@ function keyLabel(code) {
     return map[code] || code;
 }
 
+// ---------- 手続き生成テクスチャ(画像ファイルを使わずに雰囲気を作る) ----------
+
+/** キャンバスで描いた色はsRGBなので、そのまま表示されるよう明示する
+ *  (無指定だとlinear扱いになり、暗い色が大幅に明るく化けてしまう) */
+function asSRGB(tex) {
+    tex.colorSpace = THREE.SRGBColorSpace || 'srgb';
+    return tex;
+}
+
+/** 加算合成用の丸いグロー(擬似ブルームとして各所で使い回す) */
+function makeGlowTexture() {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+    return asSRGB(new THREE.CanvasTexture(c));
+}
+
+/** 星雲:柔らかい色の塊と微細な星を重ねた背景テクスチャ */
+function makeNebulaTexture() {
+    const c = document.createElement('canvas');
+    c.width = 1024;
+    c.height = 512;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#04040c';
+    ctx.fillRect(0, 0, 1024, 512);
+
+    // 紫〜青〜青緑の雲を低い不透明度で重ねる。
+    // 視野(72度)にはテクスチャの一部しか映らないため、
+    // 雲は小さめ・淡めにして「暗い宇宙に色が差す」程度に抑える
+    const blobs = [
+        { x: 160, y: 130, r: 150, rgb: '58, 28, 110' },
+        { x: 340, y: 330, r: 120, rgb: '16, 52, 120' },
+        { x: 520, y: 100, r: 140, rgb: '10, 80, 100' },
+        { x: 700, y: 280, r: 160, rgb: '110, 30, 80' },
+        { x: 880, y: 150, r: 130, rgb: '20, 40, 100' },
+        { x: 80,  y: 420, r: 110, rgb: '70, 40, 130' },
+        { x: 980, y: 420, r: 120, rgb: '12, 70, 90' },
+    ];
+    blobs.forEach(b => {
+        const grad = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
+        grad.addColorStop(0, `rgba(${b.rgb}, 0.32)`);
+        grad.addColorStop(0.6, `rgba(${b.rgb}, 0.12)`);
+        grad.addColorStop(1, `rgba(${b.rgb}, 0)`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 1024, 512);
+    });
+
+    // 遠景の微細な星
+    for (let i = 0; i < 350; i++) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.7 + 0.15})`;
+        const s = Math.random() < 0.08 ? 2 : 1;
+        ctx.fillRect(Math.random() * 1024, Math.random() * 512, s, s);
+    }
+    return asSRGB(new THREE.CanvasTexture(c));
+}
+
+/** 遠景のガス惑星:寒色の帯を重ねた表面テクスチャ */
+function makePlanetTexture() {
+    const c = document.createElement('canvas');
+    c.width = 512;
+    c.height = 256;
+    const ctx = c.getContext('2d');
+    const bands = ['#2a3466', '#38468c', '#232a55', '#41519e', '#2c3872', '#1d2547', '#333e7d'];
+    let y = 0;
+    let i = 0;
+    while (y < 256) {
+        const h = 10 + Math.random() * 26;
+        ctx.fillStyle = bands[i % bands.length];
+        ctx.fillRect(0, y, 512, h);
+        y += h;
+        i++;
+    }
+    // 帯の境界に淡い筋を入れて、のっぺりしないようにする
+    for (let k = 0; k < 40; k++) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.05})`;
+        ctx.fillRect(0, Math.random() * 256, 512, 1 + Math.random() * 3);
+    }
+    return asSRGB(new THREE.CanvasTexture(c));
+}
+
 // ---------- 機体モード定義 ----------
 // 「出力制限」ではなく質量そのものを変化させることで、
 // 同じ入力でも手応えが変わるようにしている。
@@ -141,21 +241,21 @@ const FLIGHT_MODES = [
     {
         id: 'A', name: '軽量', enName: 'LIGHT', color: '#ff3366',
         desc: '俊敏で慣性が残らない。連射は速いが装甲が薄く、被弾に弱い。',
-        mass: 0.4, drag: 0.15, force: 360,
+        mass: 0.4, drag: 0.15, force: 400,
         damageMult: 1.6, fireInterval: 70, bulletDamage: 1,
         traits: { def: 'LOW', fire: 'FAST', pow: 'MID' },
     },
     {
         id: 'B', name: '標準', enName: 'STANDARD', color: '#00aaff',
         desc: '操作性・防御・火力のバランスが取れた標準状態。',
-        mass: 1.0, drag: 0.05, force: 290,
+        mass: 1.0, drag: 0.05, force: 325,
         damageMult: 1.0, fireInterval: 95, bulletDamage: 1,
         traits: { def: 'MID', fire: 'MID', pow: 'MID' },
     },
     {
         id: 'C', name: '重装', enName: 'HEAVY', color: '#33ffaa',
         desc: '重く粘る慣性。装甲が厚く被弾に強いが、連射は遅め(一撃は重い)。',
-        mass: 2.5, drag: 0.015, force: 215,
+        mass: 2.5, drag: 0.015, force: 240,
         damageMult: 0.5, fireInterval: 140, bulletDamage: 2,
         traits: { def: 'HIGH', fire: 'SLOW', pow: 'HIGH' },
     },
@@ -195,6 +295,7 @@ class PlayerCraft {
 
         this.isBoosting = false;
         this.blinkCooldown = 0;
+        this.blinkInvincible = 0;  // ゼロシフト直後の短い無敵(クールダウンとは別)
         this.freezeTimer = 0;      // レーザー発射後の硬直
         this.hitInvincible = 0;    // 被弾直後の無敵時間
 
@@ -263,12 +364,64 @@ class PlayerCraft {
         this.flame = new THREE.Mesh(flameGeo, this.flameMat);
         this.flame.position.set(0, 0, 20);
         this.group.add(this.flame);
+
+        // エンジン後方の加算グロー(擬似ブルーム)
+        this.engineGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.game.glowTexture, color: 0xff7722, transparent: true, opacity: 0.85,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+        this.engineGlow.position.set(0, 0, 24);
+        this.engineGlow.scale.set(14, 14, 1);
+        this.group.add(this.engineGlow);
+
+        // 翼端のウィングレット(上反した小さな板)
+        const wingletGeo = new THREE.BoxGeometry(1.5, 8, 10);
+        [-1, 1].forEach(side => {
+            const winglet = new THREE.Mesh(wingletGeo, hullMat);
+            winglet.position.set(side * 21.5, 2.5, 8);
+            winglet.rotation.z = -side * 0.35;
+            this.group.add(winglet);
+            const wlEdges = new THREE.LineSegments(new THREE.EdgesGeometry(wingletGeo, 20), this.edgeMat);
+            wlEdges.position.copy(winglet.position);
+            wlEdges.rotation.copy(winglet.rotation);
+            this.group.add(wlEdges);
+        });
+
+        const makeSprite = (color, scale, opacity) => {
+            const s = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: this.game.glowTexture, color, transparent: true, opacity,
+                blending: THREE.AdditiveBlending, depthWrite: false,
+            }));
+            s.scale.set(scale, scale, 1);
+            return s;
+        };
+
+        // 翼端灯(モード色で脈動)と機首の発光チップ
+        this.tipGlows = [-1, 1].map(side => {
+            const s = makeSprite(0x00aaff, 6, 0.9);
+            s.position.set(side * 22, 6, 8);
+            this.group.add(s);
+            return s;
+        });
+        this.noseGlow = makeSprite(0x00aaff, 7, 0.7);
+        this.noseGlow.position.set(0, 0, -16);
+        this.group.add(this.noseGlow);
+
+        // サイドスラスター(バーニア):横移動の反対側が噴く
+        this.vernierL = makeSprite(0x88ddff, 8, 0);
+        this.vernierL.position.set(-11, 0, 13);
+        this.group.add(this.vernierL);
+        this.vernierR = makeSprite(0x88ddff, 8, 0);
+        this.vernierR.position.set(11, 0, 13);
+        this.group.add(this.vernierR);
     }
 
-    /** モード切替時の配色更新 */
+    /** モード切替時の配色更新(輪郭線・コクピット・翼端灯・機首チップ) */
     applyModeColor(hexColor) {
         this.edgeMat.color.set(hexColor);
         this.cockpitMat.color.set(hexColor);
+        this.tipGlows.forEach(s => s.material.color.set(hexColor));
+        this.noseGlow.material.color.set(hexColor);
     }
 
     removeLock(enemy) {
@@ -345,6 +498,7 @@ class PlayerCraft {
 
         // ---------- ブリンク(短距離瞬間移動) ----------
         if (this.blinkCooldown > 0) this.blinkCooldown -= dt;
+        if (this.blinkInvincible > 0) this.blinkInvincible -= dt;
 
         if (input.blink) {
             if (this.blinkCooldown <= 0 && (input.x !== 0 || input.y !== 0)) {
@@ -370,6 +524,7 @@ class PlayerCraft {
                 game.jerkIntensity = 1.0;
                 game.triggerSpeedLines(40);
                 this.blinkCooldown = BLINK_COOLDOWN;
+                this.blinkInvincible = BLINK_INVINCIBLE;
             }
             input.blink = false;
         }
@@ -437,6 +592,17 @@ class PlayerCraft {
         const thrust = 0.5 + inputMag * 0.8 + (this.isBoosting ? 1.6 : 0);
         this.flame.scale.set(1, 1, thrust * (0.85 + Math.random() * 0.3));
         this.flameMat.color.set(this.isBoosting ? 0x00c8ff : 0xff6400);
+
+        // エンジングローも推力に合わせて脈動させる
+        this.engineGlow.material.color.set(this.isBoosting ? 0x33ccff : 0xff7722);
+        const glowSize = 10 + thrust * 9 + Math.random() * 3;
+        this.engineGlow.scale.set(glowSize, glowSize, 1);
+
+        // 翼端灯はゆっくり明滅し、バーニアは横移動の反対側が噴く
+        const blinkPulse = 0.55 + Math.sin(performance.now() * 0.006) * 0.35;
+        this.tipGlows.forEach(s => { s.material.opacity = blinkPulse; });
+        this.vernierL.material.opacity = Math.max(0, input.x) * 0.8;
+        this.vernierR.material.opacity = Math.max(0, -input.x) * 0.8;
     }
 }
 
@@ -451,6 +617,18 @@ class Game {
 
         this.input = { x: 0, y: 0, fire: false, modeSwitch: false, boost: false, blink: false, lock: false, sub: false };
         this.audio = new SoundEngine();
+
+        // 毎フレーム・高頻度で更新するHUD要素はキャッシュしておく
+        // (ホットパスでの getElementById の繰り返しを避ける)
+        this.el = {
+            score: document.getElementById('score-display'),
+            level: document.getElementById('level-display'),
+            hpFill: document.getElementById('hp-fill'),
+            bossFill: document.getElementById('boss-fill'),
+            cooldownFill: document.getElementById('cooldown-fill'),
+            subcdFill: document.getElementById('subcd-fill'),
+            challengeTime: document.getElementById('challenge-time'),
+        };
 
         // 'title' | 'playing' | 'paused' | 'gameover'
         // 起動直後はタイトル状態にして、開始画面の裏でゲームが進まないようにする
@@ -472,6 +650,16 @@ class Game {
         this.wispCount = 0;       // 装備中のウィスプ数(100機撃破ごとに+1、最大3)
         this.wispFireTimer = 0;   // ウィスプの次弾発射までの時間
         this.grazeFlash = 0;      // グレイズ演出の残り表示時間
+        this.maxCombo = 0;        // 今回のプレイでの最大コンボ(リザルト表示用)
+        this.grazeCount = 0;      // 今回のプレイでのグレイズ回数(リザルト表示用)
+        this.gameOverTime = 0;    // ゲームオーバー画面が出た時刻(誤タップ防止用)
+        this.playerDeathTimer = 0; // 自機の爆発シーケンスの残り時間
+        this.resultPending = false; // 爆発完了待ちのリザルト表示予約
+        this.resultDelay = 0;      // 大爆発の余韻(この後にリザルトを出す)
+        this.bossRadialTimer = 0;  // ボスの放射攻撃の間隔管理
+
+        // グラビティウェル(サブ武器):同時に1個だけ存在する
+        this.well = { active: false, anchored: false, life: 0, pos: new THREE.Vector3() };
 
         // ボス戦の進行管理
         this.bossTime = 0;
@@ -524,6 +712,16 @@ class Game {
         };
         bindStart(startOverlay.querySelector('.start-btn'), 'normal');
         bindStart(document.getElementById('challenge-btn'), 'challenge');
+        bindStart(document.getElementById('free-btn'), 'free');
+
+        // フリーフライト中のEXITボタン(タイトルへ戻る)
+        const freeExit = document.getElementById('free-exit');
+        if (freeExit) {
+            freeExit.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.backToTitle();
+            });
+        }
 
         // 開始レベル選択(1 → 3 → 5 の循環)
         const levelSelect = document.getElementById('level-select');
@@ -547,8 +745,24 @@ class Game {
         document.getElementById('help-btn').addEventListener('click', () => this.toggleHelp());
         document.getElementById('help-resume').addEventListener('click', () => this.closeHelp());
 
+        // ヘルプ(ポーズ)からタイトルへ戻る
+        const helpToTitle = document.getElementById('help-to-title');
+        if (helpToTitle) {
+            helpToTitle.addEventListener('click', () => {
+                this.helpOpen = false;
+                this.keyCaptureAction = null;
+                document.getElementById('help-overlay').style.display = 'none';
+                if (this.audio.ctx) this.audio.ctx.resume();
+                this.backToTitle();
+            });
+        }
+
         // ゲームオーバー画面:タップで再スタート
-        document.getElementById('gameover-overlay').addEventListener('click', () => this.reset());
+        // (表示直後の連打による「スコアを見る前の誤リスタート」は無視する)
+        document.getElementById('gameover-overlay').addEventListener('click', () => {
+            if (performance.now() - this.gameOverTime < 600) return;
+            this.reset();
+        });
 
         // キーコンフィグUIの構築と、キー割り当て入力の受付
         this.buildKeyConfigUI();
@@ -579,17 +793,31 @@ class Game {
 
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x050510);
-        this.scene.fog = new THREE.Fog(0x050510, 500, 1300);
+        // フォグはわずかに紫がからせて、星雲の色と馴染ませる
+        this.scene.fog = new THREE.Fog(0x0a0a20, 500, 1300);
 
         this.baseFov = 72;
         this.camera = new THREE.PerspectiveCamera(this.baseFov, 1, 0.1, 2500);
         this.camera.position.set(0, 45, 170);
         this.cameraTarget = new THREE.Vector3(0, 0, -250);
 
-        this.scene.add(new THREE.AmbientLight(0x8899bb, 0.6));
+        // グロー(擬似ブルーム)用テクスチャ。自機や敵など各所で使い回す
+        this.glowTexture = makeGlowTexture();
+
+        // ---------- ライティング ----------
+        this.scene.add(new THREE.AmbientLight(0x8899bb, 0.45));
+        // 上は青・下は紫の半球光:単一光源ののっぺり感をなくす
+        this.hemiLight = new THREE.HemisphereLight(0x5577cc, 0x2a1040, 0.55);
+        this.scene.add(this.hemiLight);
         const sun = new THREE.DirectionalLight(0xffffff, 1.1);
         sun.position.set(120, 250, 80);
         this.scene.add(sun);
+        // 自機に追従する青い補助光:近くの岩塊や機体に照り返しを作る
+        this.playerLight = new THREE.PointLight(0x66aaff, 0.9, 420, 2);
+        this.scene.add(this.playerLight);
+
+        // 遠景(星雲・惑星)
+        this.buildBackdrop();
 
         // 自機
         this.player = new PlayerCraft(this);
@@ -627,11 +855,52 @@ class Game {
         this.scene.add(this.beamGroup);
 
         this.buildBoss();
+        this.boss.mesh.add(this.makeGlowSprite(0xff5566, 130, 0.4)); // ボスの威圧感を出す赤いハロー
         this.buildShockwave();
         this.buildWisps();
+        this.buildGravityWell();
         this.buildStarfield();
         this.buildDebris();
         this.buildParticles();
+    }
+
+    /** 加算グローのスプライトを作る(擬似ブルーム) */
+    makeGlowSprite(color, scale, opacity = 0.8) {
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.glowTexture, color, transparent: true, opacity,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+        sprite.scale.set(scale, scale, 1);
+        return sprite;
+    }
+
+    /** 遠景:星雲の背景球と、ゆっくり自転するガス惑星 */
+    buildBackdrop() {
+        // 星雲:内側を向いた大きな球に手続き生成テクスチャを貼る
+        const nebulaMat = new THREE.MeshBasicMaterial({
+            map: makeNebulaTexture(), side: THREE.BackSide, depthWrite: false,
+        });
+        nebulaMat.fog = false;
+        this.nebula = new THREE.Mesh(new THREE.SphereGeometry(1900, 32, 20), nebulaMat);
+        this.nebula.renderOrder = -2;
+        this.scene.add(this.nebula);
+
+        // ガス惑星と大気のグロー
+        const planetMat = new THREE.MeshStandardMaterial({
+            map: makePlanetTexture(), roughness: 1, metalness: 0,
+        });
+        planetMat.fog = false;
+        this.planet = new THREE.Mesh(new THREE.SphereGeometry(240, 32, 24), planetMat);
+        this.planet.position.set(-760, 300, -1500);
+        this.planet.rotation.z = 0.35;
+
+        const atmoMat = new THREE.MeshBasicMaterial({
+            color: 0x5588ff, transparent: true, opacity: 0.14,
+            side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
+        });
+        atmoMat.fog = false;
+        this.planet.add(new THREE.Mesh(new THREE.SphereGeometry(256, 32, 24), atmoMat));
+        this.scene.add(this.planet);
     }
 
     /** 奥から手前へ流れる星:前進している感覚を作る */
@@ -659,23 +928,53 @@ class Game {
             transparent: true, opacity: 0.9, depthWrite: false,
         }));
         this.scene.add(this.stars);
+
+        // 遠景の明るい色付き星(静止:流れる星との視差で奥行きを出す)
+        const B_COUNT = 70;
+        const bPos = new Float32Array(B_COUNT * 3);
+        const bCol = new Float32Array(B_COUNT * 3);
+        const palette = [[1, 0.95, 0.8], [0.7, 0.85, 1], [1, 0.72, 0.55], [0.8, 1, 0.95]];
+        for (let i = 0; i < B_COUNT; i++) {
+            bPos[i * 3]     = (Math.random() - 0.5) * 2600;
+            bPos[i * 3 + 1] = (Math.random() - 0.5) * 1500;
+            bPos[i * 3 + 2] = -900 - Math.random() * 700;
+            const c = palette[Math.floor(Math.random() * palette.length)];
+            bCol[i * 3] = c[0]; bCol[i * 3 + 1] = c[1]; bCol[i * 3 + 2] = c[2];
+        }
+        const bGeo = new THREE.BufferGeometry();
+        bGeo.setAttribute('position', new THREE.BufferAttribute(bPos, 3));
+        bGeo.setAttribute('color', new THREE.BufferAttribute(bCol, 3));
+        const bMat = new THREE.PointsMaterial({
+            size: 7, vertexColors: true, sizeAttenuation: true,
+            transparent: true, opacity: 0.9, depthWrite: false,
+            blending: THREE.AdditiveBlending, map: this.glowTexture,
+        });
+        bMat.fog = false;
+        this.brightStars = new THREE.Points(bGeo, bMat);
+        this.scene.add(this.brightStars);
     }
 
     /** 漂う岩塊:視差で奥行きと速度感を補強する */
     buildDebris() {
         this.debris = [];
-        const mat = new THREE.MeshStandardMaterial({
-            color: 0x3a4055, metalness: 0.1, roughness: 0.9, flatShading: true,
-        });
+        // 青灰・紫・青緑の3系統で色味に幅を持たせる
+        const mats = [
+            new THREE.MeshStandardMaterial({ color: 0x3a4055, metalness: 0.1, roughness: 0.9, flatShading: true }),
+            new THREE.MeshStandardMaterial({ color: 0x4a3a60, metalness: 0.1, roughness: 0.85, flatShading: true }),
+            new THREE.MeshStandardMaterial({ color: 0x2e4a58, metalness: 0.15, roughness: 0.9, flatShading: true }),
+        ];
         for (let i = 0; i < 10; i++) {
             const size = Math.random() * 26 + 10;
-            const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 0), mat);
+            const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 0), mats[i % mats.length]);
             rock.position.set(
                 (Math.random() - 0.5) * 1100,
                 (Math.random() - 0.5) * 700,
                 Math.random() * 1600 - 1400
             );
             rock.userData.spin = new THREE.Vector3(Math.random(), Math.random(), Math.random()).multiplyScalar(0.4);
+            // ショット・サブ武器で破壊できる(大きいほど硬い)
+            rock.userData.size = size;
+            rock.userData.hp = 1 + Math.floor(size / 12);
             this.scene.add(rock);
             this.debris.push(rock);
         }
@@ -717,6 +1016,13 @@ class Game {
         );
         group.add(core);
 
+        // コアのネオン輪郭線:多面体の面構成を際立たせる
+        this.bossEdges = new THREE.LineSegments(
+            new THREE.EdgesGeometry(core.geometry),
+            new THREE.LineBasicMaterial({ color: 0xff5566, transparent: true, opacity: 0.85 })
+        );
+        core.add(this.bossEdges);
+
         this.bossRing = new THREE.Mesh(
             new THREE.TorusGeometry(46, 2.2, 8, 40),
             new THREE.MeshBasicMaterial({
@@ -725,6 +1031,17 @@ class Game {
             })
         );
         group.add(this.bossRing);
+
+        // 逆方向に回る第二リング:機械的な禍々しさを足す
+        this.bossRing2 = new THREE.Mesh(
+            new THREE.TorusGeometry(58, 1.2, 8, 44),
+            new THREE.MeshBasicMaterial({
+                color: 0xffaa66, transparent: true, opacity: 0.35,
+                blending: THREE.AdditiveBlending, depthWrite: false,
+            })
+        );
+        this.bossRing2.rotation.x = Math.PI / 2.4;
+        group.add(this.bossRing2);
 
         const eye = new THREE.Mesh(
             new THREE.SphereGeometry(7, 10, 8),
@@ -744,25 +1061,63 @@ class Game {
         };
     }
 
-    /** ボス撃破時に広がる衝撃波リング */
+    /** 撃破時に広がる衝撃波リング。
+     *  ボスと自機の爆発が重なっても消し合わないよう、小さなプールで持つ */
     buildShockwave() {
-        this.shockwave = new THREE.Mesh(
-            new THREE.RingGeometry(0.92, 1, 48),
-            new THREE.MeshBasicMaterial({
+        this.shockwaves = [];
+        const geo = new THREE.RingGeometry(0.92, 1, 48);
+        for (let i = 0; i < 3; i++) {
+            const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
                 color: 0xffbb88, transparent: true, opacity: 0.9,
                 side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
-            })
-        );
-        this.shockwave.visible = false;
-        this.scene.add(this.shockwave);
-        this.shockwaveLife = 0;
+            }));
+            mesh.visible = false;
+            this.scene.add(mesh);
+            this.shockwaves.push({ mesh, life: 0 });
+        }
     }
 
     triggerShockwave(x, y, z) {
-        this.shockwave.position.set(x, y, z);
-        this.shockwaveLife = 1;
-        this.shockwave.scale.setScalar(12);
-        this.shockwave.visible = true;
+        // 空きがなければ最も減衰が進んだリングを再利用する
+        let ring = this.shockwaves[0];
+        for (const s of this.shockwaves) {
+            if (s.life < ring.life) ring = s;
+        }
+        ring.mesh.position.set(x, y, z);
+        ring.life = 1;
+        ring.mesh.scale.setScalar(12);
+        ring.mesh.visible = true;
+    }
+
+    /** グラビティウェル:暗い核+加算発光の殻+回転リングの重力球 */
+    buildGravityWell() {
+        this.wellGroup = new THREE.Group();
+
+        // 暗い核(吸い込む「穴」)
+        this.wellGroup.add(new THREE.Mesh(
+            new THREE.SphereGeometry(10, 16, 12),
+            new THREE.MeshBasicMaterial({ color: 0x0a0014 })
+        ));
+        // 発光する殻
+        this.wellGroup.add(new THREE.Mesh(
+            new THREE.SphereGeometry(14, 16, 12),
+            new THREE.MeshBasicMaterial({
+                color: SUB_WEAPONS.gravity.color, transparent: true, opacity: 0.25,
+                blending: THREE.AdditiveBlending, depthWrite: false,
+            })
+        ));
+        // 降着円盤風のリング
+        this.wellRing = new THREE.Mesh(
+            new THREE.TorusGeometry(22, 1.4, 8, 32),
+            new THREE.MeshBasicMaterial({
+                color: SUB_WEAPONS.gravity.color, transparent: true, opacity: 0.7,
+                blending: THREE.AdditiveBlending, depthWrite: false,
+            })
+        );
+        this.wellGroup.add(this.wellRing);
+
+        this.wellGroup.visible = false;
+        this.scene.add(this.wellGroup);
     }
 
     /** ウィスプ(機体に追従する支援ビット)。装備数ぶんだけ表示する */
@@ -773,6 +1128,7 @@ class Game {
             const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
                 color: 0x66ffee, transparent: true, opacity: 0.9,
             }));
+            mesh.add(this.makeGlowSprite(0x66ffee, 16, 0.6));
             mesh.visible = false;
             this.scene.add(mesh);
             this.wisps.push(mesh);
@@ -793,17 +1149,34 @@ class Game {
             return { active: false, mesh, vel: new THREE.Vector3() };
         }, 60);
 
-        // 敵機
-        const enemyGeo = new THREE.OctahedronGeometry(1, 0);
+        // 敵機:種類ごとにシルエットを変える(突撃=尖鋭 / 蛇行=横広の刃 / 砲撃=多面体の重装)
+        this.enemyGeos = {
+            rush: new THREE.OctahedronGeometry(1, 0),
+            weave: new THREE.OctahedronGeometry(1, 0),
+            gunner: new THREE.DodecahedronGeometry(1, 0),
+        };
+        this.enemyGeos.weave.scale(1.6, 0.5, 1);
+        this.enemyEdgeGeos = {
+            rush: new THREE.EdgesGeometry(this.enemyGeos.rush),
+            weave: new THREE.EdgesGeometry(this.enemyGeos.weave),
+            gunner: new THREE.EdgesGeometry(this.enemyGeos.gunner),
+        };
         const enemyColors = [0xff3366, 0xffaa00, 0xff00ff, 0x00ff33];
         this.enemyMats = enemyColors.map(c => new THREE.MeshStandardMaterial({
             color: 0x111118, emissive: c, emissiveIntensity: 0.7, flatShading: true,
         }));
         this.enemies = new ObjectPool(() => {
-            const mesh = new THREE.Mesh(enemyGeo, this.enemyMats[0]);
+            const mesh = new THREE.Mesh(this.enemyGeos.rush, this.enemyMats[0]);
             mesh.visible = false;
+            // 敵色に合わせた発光ハロー(親メッシュのスケールに追従する)
+            const glow = this.makeGlowSprite(0xff3366, 3, 0.5);
+            mesh.add(glow);
+            // ネオンの輪郭線:暗い機体色でも形が読める
+            const edge = new THREE.LineSegments(this.enemyEdgeGeos.rush,
+                new THREE.LineBasicMaterial({ color: 0xff3366, transparent: true, opacity: 0.9 }));
+            mesh.add(edge);
             this.scene.add(mesh);
-            return { active: false, id: 0, mesh, vel: new THREE.Vector3(), hp: 0, size: 0, locked: false, colorHex: '#ff3366' };
+            return { active: false, id: 0, mesh, glow, edge, vel: new THREE.Vector3(), hp: 0, size: 0, locked: false, colorHex: '#ff3366' };
         }, 40);
 
         // 追尾する飛翔体(軌跡ライン付き)は共通の作りでプール化する
@@ -811,20 +1184,23 @@ class Game {
         this.comets = this.createTrailPool(8, SUB_WEAPONS.comet.color);  // 誘導弾
         this.missiles = this.createTrailPool(30, SUB_WEAPONS.missile.color); // 追尾ミサイル
 
-        // アイテム(サブ武器3種+修理)
+        // アイテム(サブ武器4種+修理)
         const ringGeo = new THREE.TorusGeometry(11, 0.9, 8, 24);
         const innerGeos = {
             halberd: new THREE.BoxGeometry(9, 9, 9),
             comet: new THREE.SphereGeometry(6, 10, 8),
             missile: new THREE.ConeGeometry(6, 12, 8),
+            gravity: new THREE.TorusKnotGeometry(4.5, 1.6, 32, 6),
             repair: new THREE.OctahedronGeometry(7, 0),
         };
         const innerColors = {
             halberd: SUB_WEAPONS.halberd.color,
             comet: SUB_WEAPONS.comet.color,
             missile: SUB_WEAPONS.missile.color,
+            gravity: SUB_WEAPONS.gravity.color,
             repair: 0x66ff88,
         };
+        this.itemColors = innerColors; // 取得時のグロー色にも使う
         this.items = new ObjectPool(() => {
             const group = new THREE.Group();
             group.add(new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
@@ -841,9 +1217,12 @@ class Game {
                 inners[type] = m;
                 group.add(m);
             }
+            // アイテムの存在を遠くからでも知らせる色付きハロー
+            const glow = this.makeGlowSprite(0xffffff, 34, 0.45);
+            group.add(glow);
             group.visible = false;
             this.scene.add(group);
-            return { active: false, group, inners, type: 'halberd', vel: new THREE.Vector3() };
+            return { active: false, group, glow, inners, type: 'halberd', vel: new THREE.Vector3() };
         }, 6);
 
         // ボスの弾
@@ -851,12 +1230,13 @@ class Game {
         this.shotMat = new THREE.MeshBasicMaterial({
             color: 0xff6688, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
         });
+        // レベル4以降はボスの3方向弾+12方向放射+砲撃型が重なるため多めに確保する
         this.enemyShots = new ObjectPool(() => {
             const mesh = new THREE.Mesh(shotGeo, this.shotMat);
             mesh.visible = false;
             this.scene.add(mesh);
             return { active: false, mesh, vel: new THREE.Vector3() };
-        }, 30);
+        }, 48);
 
         // ブリンクの残像
         const ghostGeo = new THREE.ConeGeometry(7, 30, 4);
@@ -1048,8 +1428,8 @@ class Game {
         // スコアに応じてレベルが上がり、敵の出現数・速度・耐久が増す
         // (タイトルで選んだ開始レベルが下駄になる)
         this.level = this.startLevel + Math.floor(this.score / SCORE_PER_LEVEL);
-        document.getElementById('score-display').innerText = this.score;
-        document.getElementById('level-display').innerText = this.level;
+        this.el.score.innerText = this.score;
+        this.el.level.innerText = this.level;
     }
 
     /** タイトルの開始レベル選択(1 → 3 → 5 の循環) */
@@ -1066,7 +1446,7 @@ class Game {
     }
 
     updateHpBar() {
-        document.getElementById('hp-fill').style.width = (this.hp / PLAYER_MAX_HP * 100) + '%';
+        this.el.hpFill.style.width = (this.hp / PLAYER_MAX_HP * 100) + '%';
     }
 
     /** タイトル画面のベストスコア表示を更新する */
@@ -1086,8 +1466,8 @@ class Game {
     damagePlayer(amount) {
         // デバッグのGODモード中はダメージを受けない
         if (this.debugGod) return;
-        // チャレンジモードは無敵:軽い揺れだけ返す
-        if (this.gameMode === 'challenge') {
+        // チャレンジ・フリーフライトは無敵:軽い揺れだけ返す
+        if (this.gameMode === 'challenge' || this.gameMode === 'free') {
             this.shakeIntensity = Math.max(this.shakeIntensity, 0.35);
             return;
         }
@@ -1127,10 +1507,11 @@ class Game {
         this.lockCone.visible = false;
 
         // 撃墜演出(チャレンジの時間切れでは機体は無事のまま)
+        // 最初の爆発のあと約0.9秒、連鎖爆発 → 最後に大爆発+衝撃波のシーケンスへ入る
         if (!isChallenge) {
             this.spawnExplosion(p.pos.x, p.pos.y, p.pos.z, '#ff5533', 40);
-            this.spawnExplosion(p.pos.x, p.pos.y, p.pos.z, '#ffffff', 30);
             p.group.visible = false;
+            this.playerDeathTimer = 0.9;
             this.shakeIntensity = 1.5;
             this.damageFlash = 1.0;
         }
@@ -1143,8 +1524,13 @@ class Game {
             titleEl.style.textShadow = isChallenge ? '0 0 16px #fa0' : '0 0 16px #f00';
         }
 
+        this.gameOverTime = performance.now();
         document.getElementById('final-score').innerText = this.score;
         document.getElementById('final-kills').innerText = this.killCount;
+
+        // 今回のプレイの統計(最大コンボ・グレイズ回数)
+        const statsEl = document.getElementById('run-stats');
+        if (statsEl) statsEl.innerText = `MAX COMBO ×${this.maxCombo} ・ GRAZE ${this.grazeCount}`;
 
         // ハイスコア(モード別)を更新して表示する
         const bestKey = isChallenge ? CHALLENGE_BEST_STORAGE : BEST_STORAGE;
@@ -1171,8 +1557,23 @@ class Game {
         }
 
         document.getElementById('boss-bar-wrap').style.display = 'none';
-        document.getElementById('gameover-overlay').style.display = 'flex';
         document.getElementById('help-btn').style.display = 'none';
+
+        // リザルトは機体の爆発シーケンスが終わってから表示する
+        // (チャレンジの時間切れは爆発しないので即時表示)
+        if (isChallenge) {
+            this.showResultOverlay();
+        } else {
+            this.resultPending = true;
+        }
+    }
+
+    /** リザルト(ゲームオーバー画面)を表示する */
+    showResultOverlay() {
+        this.resultPending = false;
+        // 誤タップ防止は「画面が見えた時点」から数える
+        this.gameOverTime = performance.now();
+        document.getElementById('gameover-overlay').style.display = 'flex';
     }
 
     // ---------- ランキング(ローカル上位5件) ----------
@@ -1210,6 +1611,8 @@ class Game {
 
     /** ゲームオーバー画面からタイトルへ戻る */
     backToTitle() {
+        // モードはタイトルで選び直すため通常へ戻す(チャレンジの残り時間表示も消える)
+        this.gameMode = 'normal';
         this.reset();
         this.state = 'title';
         document.getElementById('start-overlay').style.display = 'flex';
@@ -1274,8 +1677,20 @@ class Game {
         this.wispCount = 0;
         this.wispFireTimer = 0;
         this.grazeFlash = 0;
+        this.maxCombo = 0;
+        this.grazeCount = 0;
         this.wisps.forEach(w => { w.visible = false; });
         this.updateWispUI();
+        this.well.active = false;
+        this.well.anchored = false;
+        this.well.life = 0;
+        this.wellGroup.visible = false;
+        this.playerDeathTimer = 0;
+        this.resultPending = false;
+        this.resultDelay = 0;
+
+        // 隕石も初期状態へ(壊れかけ・異常位置を持ち越さない)
+        this.debris.forEach(rock => this.respawnRock(rock));
 
         const p = this.player;
         p.pos.set(0, 0, 0);
@@ -1285,6 +1700,7 @@ class Game {
         p.visualPitch = 0;
         p.freezeTimer = 0;
         p.blinkCooldown = 0;
+        p.blinkInvincible = 0;
         p.isBoosting = false;
         p.hitInvincible = 0;
         p.wasLocking = false;
@@ -1315,8 +1731,7 @@ class Game {
         this.boss.mesh.visible = false;
         this.boss.locked = false;
         this.nextBossScore = BOSS_FIRST_SCORE;
-        this.shockwaveLife = 0;
-        this.shockwave.visible = false;
+        this.shockwaves.forEach(s => { s.life = 0; s.mesh.visible = false; });
         document.getElementById('boss-bar-wrap').style.display = 'none';
 
         // チャレンジモードの制限時間
@@ -1330,6 +1745,10 @@ class Game {
         } else if (timeEl) {
             timeEl.style.display = 'none';
         }
+
+        // フリーフライト中だけEXITボタンを出す
+        const freeExitEl = document.getElementById('free-exit');
+        if (freeExitEl) freeExitEl.style.display = this.gameMode === 'free' ? 'flex' : 'none';
 
         // 押しっぱなしの入力が持ち越されないようにする
         Object.assign(this.input, {
@@ -1428,6 +1847,7 @@ class Game {
         for (const type of Object.keys(item.inners)) {
             item.inners[type].visible = (type === item.type);
         }
+        item.glow.material.color.set(this.itemColors[item.type]);
         item.group.position.copy(pos);
         item.vel.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, 90);
         item.group.visible = true;
@@ -1491,6 +1911,7 @@ class Game {
             // 連続撃破コンボ:猶予時間内に倒し続けるとボーナスが伸びる(最大+100%)
             this.combo++;
             this.comboTimer = COMBO_WINDOW;
+            this.maxCombo = Math.max(this.maxCombo, this.combo);
             const mult = 1 + Math.min(this.combo - 1, 10) * 0.1;
             this.addScore(Math.round((e.size > 12 ? 200 : 100) * mult));
             this.killCount++;
@@ -1585,6 +2006,11 @@ class Game {
         const matIndex = kind === 'gunner' ? 1 : Math.floor(Math.random() * this.enemyMats.length);
         enemy.mesh.material = this.enemyMats[matIndex];
         enemy.colorHex = '#' + this.enemyMats[matIndex].emissive.getHexString();
+        enemy.glow.material.color.set(enemy.colorHex);
+        // 種類に応じたシルエットと輪郭線へ切り替える
+        enemy.mesh.geometry = this.enemyGeos[kind];
+        enemy.edge.geometry = this.enemyEdgeGeos[kind];
+        enemy.edge.material.color.set(enemy.colorHex);
         enemy.mesh.scale.setScalar(enemy.size);
         enemy.mesh.visible = true;
         return enemy;
@@ -1623,6 +2049,7 @@ class Game {
         boss.mesh.visible = true;
         this.bossTime = 0;
         this.bossFireTimer = 1.2;
+        this.bossRadialTimer = 3.5;
         document.getElementById('boss-bar-wrap').style.display = 'block';
         this.updateBossBar();
         this.audio.playAlarm();
@@ -1630,8 +2057,7 @@ class Game {
     }
 
     updateBossBar() {
-        document.getElementById('boss-fill').style.width =
-            Math.max(0, this.boss.hp / this.boss.maxHp * 100) + '%';
+        this.el.bossFill.style.width = Math.max(0, this.boss.hp / this.boss.maxHp * 100) + '%';
     }
 
     damageBoss(amount) {
@@ -1678,6 +2104,7 @@ class Game {
 
         boss.core.rotation.x += dt * 4;
         this.bossRing.rotation.z += dt * 6;
+        this.bossRing2.rotation.y += dt * 5;
         pos.x += (Math.random() - 0.5) * 5;
         pos.y += (Math.random() - 0.5) * 5;
         if (Math.random() < dt * 16) {
@@ -1704,8 +2131,10 @@ class Game {
     updateBoss(dt, player) {
         const boss = this.boss;
         if (!boss.active) {
-            // スコアが基準に達したらボス出現(断末魔の最中は待つ)
-            if (!boss.dying && this.score >= this.nextBossScore) this.spawnBoss();
+            // スコアが基準に達したらボス出現(断末魔の最中とフリーフライトでは出ない)
+            if (!boss.dying && this.gameMode !== 'free' && this.score >= this.nextBossScore) {
+                this.spawnBoss();
+            }
             return;
         }
         this.bossTime += dt;
@@ -1722,6 +2151,8 @@ class Game {
         boss.core.rotation.y += dt * 0.9;
         this.bossRing.rotation.x += dt * 1.4;
         this.bossRing.rotation.z += dt * 0.8;
+        this.bossRing2.rotation.y += dt * 1.1;
+        this.bossRing2.rotation.z -= dt * 0.6;
 
         // 自機を狙った3方向弾(レベルが上がるほど間隔が詰まる)
         this.bossFireTimer -= dt;
@@ -1736,6 +2167,24 @@ class Game {
                 shot.vel.copy(dir).multiplyScalar(BOSS_SHOT_SPEED);
                 shot.vel.x += i * 60; // 中央+左右への3方向
                 shot.mesh.visible = true;
+            }
+        }
+
+        // レベル4以降:一定間隔で12方向の放射弾をばら撒く(高難度の見せ場)
+        if (this.level >= 4) {
+            this.bossRadialTimer -= dt;
+            if (this.bossRadialTimer <= 0) {
+                this.bossRadialTimer = Math.max(2.5, 4.4 - this.level * 0.1);
+                const base = Math.random() * Math.PI * 2;
+                for (let i = 0; i < 12; i++) {
+                    const shot = this.enemyShots.get();
+                    if (!shot) break;
+                    const a = base + (i / 12) * Math.PI * 2;
+                    shot.mesh.position.copy(pos);
+                    shot.vel.set(Math.cos(a) * 150, Math.sin(a) * 150, BOSS_SHOT_SPEED * 0.7);
+                    shot.mesh.visible = true;
+                }
+                this.audio.playVolley();
             }
         }
     }
@@ -1946,6 +2395,16 @@ class Game {
                 this.audio.playMissileLaunch();
                 this.jerkIntensity = Math.min(1.0, this.jerkIntensity + 0.4);
                 this.triggerSpeedLines(15);
+            } else if (type === 'gravity' && !this.well.active) {
+                // 重力球を前方へ射出する(同時に1個まで)
+                this.well.active = true;
+                this.well.anchored = false;
+                this.well.life = WELL_DURATION;
+                this.well.pos.set(p.pos.x, p.pos.y, p.pos.z - 20);
+                this.wellGroup.visible = true;
+                p.subCooldown = SUB_WEAPONS.gravity.cooldown;
+                this.audio.playGravity();
+                this.triggerSpeedLines(10);
             }
         }
 
@@ -1957,6 +2416,131 @@ class Game {
             const pulse = 0.88 + Math.random() * 0.24;
             this.beamGroup.scale.set(pulse, pulse, 1200);
         }
+    }
+
+    /** 隕石にダメージを与える。壊れたら爆発し、景観が途切れないよう奥へ再配置する */
+    damageRock(rock, damage) {
+        rock.userData.hp -= damage;
+        if (rock.userData.hp > 0) return;
+        this.spawnExplosion(rock.position.x, rock.position.y, rock.position.z,
+            '#99aabb', Math.min(30, Math.round(rock.userData.size)));
+        this.jerkIntensity = Math.min(1, this.jerkIntensity + 0.1);
+        // まれにアイテムが埋まっている(採掘の楽しみ)
+        if (Math.random() < 0.1) this.spawnItem(rock.position);
+        this.respawnRock(rock);
+    }
+
+    respawnRock(rock) {
+        rock.position.set(
+            (Math.random() - 0.5) * 1100,
+            (Math.random() - 0.5) * 700,
+            -1400 - Math.random() * 200
+        );
+        rock.userData.hp = 1 + Math.floor(rock.userData.size / 12);
+    }
+
+    /** 隕石とショット・サブ武器の衝突判定。ロックオンレーザーは対象外 */
+    updateRockCombat(dt, mode) {
+        const player = this.player;
+        this.debris.forEach(rock => {
+            // 通常弾(ウィスプの弾も含む)
+            const rBullet = rock.userData.size + 8;
+            this.bullets.forEachActive(b => {
+                if (b.mesh.position.distanceToSquared(rock.position) < rBullet * rBullet) {
+                    b.active = false;
+                    b.mesh.visible = false;
+                    this.damageRock(rock, mode.bulletDamage);
+                }
+            });
+
+            // 誘導弾・ミサイル(追尾レーザーはロックオン武器なのですり抜ける)
+            const rProj = rock.userData.size + 12;
+            const hitPool = (pool) => pool.forEachActive(l => {
+                if (l.pos.distanceToSquared(rock.position) < rProj * rProj) {
+                    l.active = false;
+                    l.line.visible = false;
+                    this.spawnExplosion(l.pos.x, l.pos.y, l.pos.z, l.cssColor, 8);
+                    this.damageRock(rock, l.damage);
+                }
+            });
+            hitPool(this.comets);
+            hitPool(this.missiles);
+
+            // 照射ビーム(継続ダメージ)
+            if (player.beamActive && rock.position.z < player.pos.z) {
+                const dx = rock.position.x - player.pos.x;
+                const dy = rock.position.y - player.pos.y;
+                const rr = BEAM_RADIUS + rock.userData.size;
+                if (dx * dx + dy * dy < rr * rr) this.damageRock(rock, BEAM_DPS * dt);
+            }
+
+            // グラビティウェルの中心部
+            if (this.well.active && this.well.anchored &&
+                rock.position.distanceTo(this.well.pos) < WELL_DAMAGE_RADIUS + rock.userData.size) {
+                this.damageRock(rock, WELL_DPS * dt);
+            }
+        });
+    }
+
+    /** グラビティウェルの更新:前進 → 停留して吸引・継続ダメージ → 爆発して消滅 */
+    updateGravityWell(dt) {
+        const well = this.well;
+        if (!well.active) return;
+
+        if (!well.anchored) {
+            // 射出フェーズ:前方の停留点まで進む
+            well.pos.z -= WELL_TRAVEL_SPEED * dt;
+            if (well.pos.z <= WELL_ANCHOR_Z) {
+                well.pos.z = WELL_ANCHOR_Z;
+                well.anchored = true;
+            }
+        } else {
+            well.life -= dt;
+
+            // 吸引と中心部の継続ダメージ(ボスは質量が大きすぎて効かない設定)
+            this.enemies.forEachActive(e => {
+                const d = e.mesh.position.distanceTo(well.pos);
+                if (d < WELL_PULL_RADIUS && d > 1) {
+                    const pull = (1 - d / WELL_PULL_RADIUS) * WELL_PULL_ACCEL;
+                    e.vel.x += (well.pos.x - e.mesh.position.x) / d * pull * dt;
+                    e.vel.y += (well.pos.y - e.mesh.position.y) / d * pull * dt;
+                    e.vel.z += (well.pos.z - e.mesh.position.z) / d * pull * dt;
+                    // 蛇行型のvel.x上書きを止め、吸引を効かせるためのフラグ
+                    e._wellPulled = true;
+                }
+                if (d < WELL_DAMAGE_RADIUS + e.size) {
+                    e.hp -= WELL_DPS * dt;
+                    if (Math.random() < dt * 8) {
+                        this.spawnExplosion(e.mesh.position.x, e.mesh.position.y, e.mesh.position.z,
+                            SUB_WEAPONS.gravity.cssColor, 3);
+                    }
+                    if (e.hp <= 0) this.destroyEnemy(e);
+                }
+            });
+
+            // 敵弾は飲み込んで消す(防御手段としても機能する)
+            this.enemyShots.forEachActive(s => {
+                if (s.mesh.position.distanceToSquared(well.pos) < WELL_SHOT_EAT_RADIUS * WELL_SHOT_EAT_RADIUS) {
+                    s.active = false;
+                    s.mesh.visible = false;
+                }
+            });
+
+            // 時間切れ:弾けて消える
+            if (well.life <= 0) {
+                well.active = false;
+                this.wellGroup.visible = false;
+                this.spawnExplosion(well.pos.x, well.pos.y, well.pos.z, SUB_WEAPONS.gravity.cssColor, 24);
+                this.triggerSpeedLines(8);
+            }
+        }
+
+        // 見た目:リングの回転と停留中の脈動
+        this.wellGroup.position.copy(well.pos);
+        this.wellRing.rotation.z += dt * 4;
+        this.wellRing.rotation.x += dt * 2.5;
+        const pulse = well.anchored ? 1 + Math.sin(performance.now() * 0.02) * 0.15 : 0.7;
+        this.wellGroup.scale.setScalar(pulse);
     }
 
     /** 追尾飛翔体の共通更新処理。retarget指定時は目標消失後に近くの敵へ引き継ぐ */
@@ -2067,6 +2651,12 @@ class Game {
             }
         });
 
+        // ---------- 遠景と補助光(常時) ----------
+        // 星雲と惑星がゆっくり動き、宇宙が「生きている」感を出す
+        this.nebula.rotation.y += dt * 0.004;
+        this.planet.rotation.y += dt * 0.012;
+        this.playerLight.position.set(this.player.pos.x, this.player.pos.y + 12, this.player.pos.z + 40);
+
         if (playing) {
             this.updateGameplay(dt, player);
         }
@@ -2109,19 +2699,50 @@ class Game {
         });
 
         // ---------- 衝撃波リングの拡散(常時) ----------
-        if (this.shockwaveLife > 0) {
-            this.shockwaveLife -= dt * 1.4;
-            if (this.shockwaveLife <= 0) {
-                this.shockwave.visible = false;
-            } else {
-                const s = (1 - this.shockwaveLife) * 320 + 12;
-                this.shockwave.scale.setScalar(s);
-                this.shockwave.material.opacity = this.shockwaveLife * 0.9;
+        this.shockwaves.forEach(s => {
+            if (s.life <= 0) return;
+            s.life -= dt * 1.4;
+            if (s.life <= 0) {
+                s.mesh.visible = false;
+                return;
             }
-        }
+            const scale = (1 - s.life) * 320 + 12;
+            s.mesh.scale.setScalar(scale);
+            s.mesh.material.opacity = s.life * 0.9;
+        });
 
         // ---------- ボスの断末魔(常時:ゲームオーバー中でも完走させる) ----------
         this.updateBossDeath(dt);
+
+        // ---------- 自機の爆発シーケンス(常時:ゲームオーバー画面の裏で完走させる) ----------
+        if (this.playerDeathTimer > 0) {
+            this.playerDeathTimer -= dt;
+            const pp = this.player.pos;
+            // 残骸のまわりで小爆発が連鎖する
+            if (Math.random() < dt * 14) {
+                this.spawnExplosion(
+                    pp.x + (Math.random() - 0.5) * 50,
+                    pp.y + (Math.random() - 0.5) * 50,
+                    pp.z + (Math.random() - 0.5) * 30,
+                    '#ff7744', 6);
+            }
+            if (this.playerDeathTimer <= 0) {
+                // 最後の大爆発と衝撃波
+                this.spawnExplosion(pp.x, pp.y, pp.z, '#ff5533', 50);
+                this.spawnExplosion(pp.x, pp.y, pp.z, '#ffffff', 35);
+                this.triggerShockwave(pp.x, pp.y, pp.z);
+                this.shakeIntensity = 1.6;
+                this.resultDelay = 0.5; // 爆発の余韻を見せてからリザルトへ
+            }
+        }
+
+        // 爆発の余韻が終わったらリザルトを表示する
+        if (this.resultDelay > 0) {
+            this.resultDelay -= dt;
+            if (this.resultDelay <= 0 && this.resultPending && this.state === 'gameover') {
+                this.showResultOverlay();
+            }
+        }
 
         // ---------- デバッグ統計(パネル表示中のみ) ----------
         if (this.debugEnabled) {
@@ -2156,7 +2777,7 @@ class Game {
         // ---------- チャレンジモードの残り時間 ----------
         if (this.gameMode === 'challenge') {
             this.challengeTimeLeft -= dt;
-            const timeEl = document.getElementById('challenge-time');
+            const timeEl = this.el.challengeTime;
             if (timeEl) timeEl.innerText = this.formatTime(this.challengeTimeLeft);
             if (this.challengeTimeLeft <= 0) {
                 this.gameOver();
@@ -2194,7 +2815,9 @@ class Game {
 
         this.bullets.forEachActive(b => {
             b.mesh.position.addScaledVector(b.vel, dt);
-            if (b.mesh.position.z < SPAWN_Z - 100) {
+            // ウィスプの照準弾は斜めに飛ぶため、横方向の範囲外でも消す
+            const bp = b.mesh.position;
+            if (bp.z < SPAWN_Z - 100 || Math.abs(bp.x) > 1300 || Math.abs(bp.y) > 900) {
                 b.active = false;
                 b.mesh.visible = false;
             }
@@ -2225,7 +2848,14 @@ class Game {
                     if (!bullet) break;
                     bullet.mesh.position.copy(this.wisps[i].position);
                     bullet.mesh.position.z -= 10;
-                    bullet.vel.set(0, 0, -BULLET_SPEED);
+                    // 前方の一番近い敵(ボス含む)を狙って撃つ。いなければまっすぐ
+                    const target = this.findNearestEnemy(this.wisps[i].position, this.wisps[i].position.z);
+                    if (target) {
+                        bullet.vel.subVectors(target.mesh.position, this.wisps[i].position)
+                            .normalize().multiplyScalar(BULLET_SPEED);
+                    } else {
+                        bullet.vel.set(0, 0, -BULLET_SPEED);
+                    }
                     bullet.mesh.visible = true;
                 }
                 this.audio.playShot();
@@ -2234,15 +2864,19 @@ class Game {
 
         // ---------- サブ武器 ----------
         this.updateSubWeapon(dt);
+        this.updateGravityWell(dt);
+
+        // ---------- 隕石の破壊判定 ----------
+        this.updateRockCombat(dt, mode);
 
         // ---------- 追尾する飛翔体 ----------
         this.updateProjectiles(this.homingLasers, LASER_SPEED, LASER_TURN_RATE, dt, false);
         this.updateProjectiles(this.comets, COMET_SPEED, 9.0, dt, false);
         this.updateProjectiles(this.missiles, MISSILE_SPEED, 5.5, dt, true);
 
-        // ---------- 敵の出現(レベルが上がるほど間隔が詰まる) ----------
+        // ---------- 敵の出現(レベルが上がるほど間隔が詰まる。フリーフライトでは湧かない) ----------
         this.spawnTimer -= dt;
-        if (this.spawnTimer <= 0) {
+        if (this.spawnTimer <= 0 && this.gameMode !== 'free') {
             // ボス戦中は雑魚の出現を減らして、ボスに集中できるようにする
             this.spawnTimer = (Math.random() * 0.5 + 0.25) / (1 + (this.level - 1) * 0.18)
                 * (this.boss.active ? 2.5 : 1);
@@ -2250,12 +2884,15 @@ class Game {
         }
 
         // ---------- 敵の更新と衝突判定 ----------
-        // (ブーストの無敵は廃止:ゼロシフト直後・硬直中・被弾直後のみ無敵)
-        const isInvincible = player.blinkCooldown > 0 ||
+        // 無敵はゼロシフト直後の短時間・硬直中・被弾直後のみ
+        // (blinkCooldown全体ではなくblinkInvincibleを使う:連打での常時無敵を防ぐ)
+        const isInvincible = player.blinkInvincible > 0 ||
                              player.freezeTimer > 0 || player.hitInvincible > 0;
         const steer = Math.min(80, 28 + (this.level - 1) * 5);
         const beamRangeSq = (r) => r * r;
 
+        // 注意: 衝突は総当たり(敵×各弾プール)。プール上限が小さい(≤60)前提の設計で、
+        // 敵数を大きく増やす場合は空間分割の導入を検討すること。
         this.enemies.forEachActive(e => {
             // 自機の近くでは軌道を確定させ、直前の吸い付き・横っ飛びをなくす
             // (プレイヤーが敵の進路を読んで回避できるようにする)
@@ -2271,9 +2908,10 @@ class Game {
 
             // ---------- 種類ごとの挙動 ----------
             if (e.kind === 'weave') {
-                // 蛇行型:左右へ大きく揺れながら接近する(近距離では直進に移る)
+                // 蛇行型:左右へ大きく揺れながら接近する
+                // (近距離、および重力球に吸われている間は蛇行をやめる)
                 e.wavePhase += dt * 3;
-                if (!committed) e.vel.x = Math.sin(e.wavePhase) * 130;
+                if (!committed && !e._wellPulled) e.vel.x = Math.sin(e.wavePhase) * 130;
             } else if (e.kind === 'gunner') {
                 // 砲撃型:遠距離から自機を狙って単発弾を撃つ
                 e.fireTimer -= dt;
@@ -2287,6 +2925,8 @@ class Game {
                     }
                 }
             }
+
+            e._wellPulled = false; // 吸引フラグは1フレームで消費する
 
             e.mesh.position.addScaledVector(e.vel, dt);
             e.mesh.rotation.x += dt * 1.2;
@@ -2357,6 +2997,7 @@ class Game {
                 const gr = e.size + PLAYER_HIT_RADIUS + GRAZE_PAD;
                 if (e.mesh.position.distanceToSquared(player.pos) < gr * gr) {
                     e.grazed = true;
+                    this.grazeCount++;
                     this.addScore(GRAZE_SCORE);
                     this.grazeFlash = 0.6;
                     this.triggerSpeedLines(3);
@@ -2406,6 +3047,14 @@ class Game {
                     if (Math.random() < dt * 12) {
                         this.spawnExplosion(bp.x, bp.y, bp.z, SUB_WEAPONS.halberd.cssColor, 4);
                     }
+                }
+            }
+
+            // 自機との接触(ザコと同様にダメージ。ボス自体は消えない。チャレンジはすり抜け)
+            if (boss.active && !isInvincible && this.gameMode !== 'challenge') {
+                const r = boss.size + PLAYER_HIT_RADIUS;
+                if (bp.distanceToSquared(player.pos) < r * r) {
+                    this.damagePlayer(COLLISION_DAMAGE);
                 }
             }
         }
@@ -2479,7 +3128,7 @@ class Game {
 
         // ---------- HUDゲージの更新 ----------
         const blinkRatio = Math.max(0, Math.min(1, 1 - player.blinkCooldown / BLINK_COOLDOWN));
-        document.getElementById('cooldown-fill').style.width = (blinkRatio * 100) + '%';
+        this.el.cooldownFill.style.width = (blinkRatio * 100) + '%';
 
         let subRatio = 0;
         if (player.subWeapon) {
@@ -2488,7 +3137,7 @@ class Game {
                 ? Math.max(0, 1 - player.beamTime / BEAM_MAX_DURATION)
                 : Math.max(0, Math.min(1, 1 - player.subCooldown / SUB_WEAPONS[player.subWeapon].cooldown));
         }
-        document.getElementById('subcd-fill').style.width = (subRatio * 100) + '%';
+        this.el.subcdFill.style.width = (subRatio * 100) + '%';
     }
 
     // ---------- カメラ ----------
@@ -2534,6 +3183,20 @@ class Game {
         const w = window.innerWidth;
         const h = window.innerHeight;
         ctx.clearRect(0, 0, w, h);
+
+        // ビネット:画面端をわずかに暗くして中央へ視線を集める(サイズ変更時のみ作り直す)
+        if (!this._vignette || this._vigW !== w || this._vigH !== h) {
+            const grad = ctx.createRadialGradient(
+                w / 2, h / 2, Math.min(w, h) * 0.42,
+                w / 2, h / 2, Math.max(w, h) * 0.72);
+            grad.addColorStop(0, 'rgba(5, 5, 18, 0)');
+            grad.addColorStop(1, 'rgba(5, 5, 18, 0.4)');
+            this._vignette = grad;
+            this._vigW = w;
+            this._vigH = h;
+        }
+        ctx.fillStyle = this._vignette;
+        ctx.fillRect(0, 0, w, h);
 
         // ロックオン照準:敵の3D座標を画面座標へ投影して描く
         const player = this.player;
@@ -2632,7 +3295,8 @@ window.ZMF = {
         BOUND_X, BOUND_Y, SPAWN_Z, DESPAWN_Z,
         BULLET_SPEED, LASER_SPEED, MISSILE_SPEED, MISSILE_COUNT,
         PLAYER_MAX_HP, COLLISION_DAMAGE, HIT_INVINCIBLE_TIME, SCORE_PER_LEVEL,
-        BEAM_RADIUS, BEAM_DPS, BEAM_MAX_DURATION, COMET_SPEED, BLINK_COOLDOWN, BLINK_DIST,
+        BEAM_RADIUS, BEAM_DPS, BEAM_MAX_DURATION, COMET_SPEED,
+        BLINK_COOLDOWN, BLINK_DIST, BLINK_INVINCIBLE,
         BOSS_FIRST_SCORE, BOSS_SCORE_INTERVAL, BOSS_SHOT_SPEED, BOSS_SHOT_DAMAGE,
         BOSS_BONUS_SCORE, REPAIR_HEAL,
         ITEM_PICKUP_RADIUS, ITEM_MAGNET_RANGE, CHALLENGE_TIME,
@@ -2642,6 +3306,8 @@ window.ZMF = {
         WISP_KILLS_PER, WISP_MAX, WISP_FIRE_INTERVAL,
         GRAZE_SCORE, GRAZE_PAD,
         PLAYER_HIT_RADIUS, ENEMY_COMMIT_Z,
+        WELL_TRAVEL_SPEED, WELL_ANCHOR_Z, WELL_DURATION, WELL_PULL_RADIUS,
+        WELL_DAMAGE_RADIUS, WELL_DPS, WELL_SHOT_EAT_RADIUS,
     },
     storageKeys: {
         keys: KEYS_STORAGE, best: BEST_STORAGE,

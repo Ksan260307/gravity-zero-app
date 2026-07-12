@@ -26,6 +26,7 @@
 
     <div class="start-btn">TAP TO START</div>
     <div class="start-btn start-btn-sub" id="challenge-btn">CHALLENGE MODE<small>2 MIN / INVINCIBLE / SCORE ATTACK</small></div>
+    <div class="start-btn start-btn-sub" id="free-btn">FREE FLIGHT<small>NO ENEMIES / PRACTICE</small></div>
 
     <div class="level-select" id="level-select">START LEVEL <b id="start-level-val">1</b> ▸</div>
 
@@ -63,6 +64,7 @@
             <li><b style="color:#66ffff;">ハルバード</b> — 押している間、前方へ太いレーザーを照射(連続5秒まで)。使った時間に応じて最大5秒待機。</li>
             <li><b style="color:#ff66ff;">コメット</b> — 単発の誘導弾。1秒ごとに発射。</li>
             <li><b style="color:#ffaa33;">ホーミングミサイル</b> — 10発を上下に撒いてから追尾。10秒待機。</li>
+            <li><b style="color:#cc88ff;">グラビティウェル</b> — 前方に停留する重力球。周囲の敵を吸い込み、中心で溶かし、敵弾も飲み込む(大型機には効かない)。8秒待機。</li>
             <li><b style="color:#66ff88;">修理キット</b> — 拾うと耐久が30回復する。</li>
         </ul>
     </div>
@@ -75,6 +77,7 @@
         </div>
     </div>
     <div class="start-btn" id="help-resume">ゲームに戻る</div>
+    <div class="start-btn start-btn-sub" id="help-to-title">タイトルへ戻る</div>
 </div>
 
 <!-- ゲームオーバー画面 -->
@@ -82,6 +85,7 @@
     <div class="game-title" id="gameover-title" style="color: #ff6655; text-shadow: 0 0 16px #f00;">GAME OVER</div>
     <div class="game-subtitle">SCORE <span id="final-score">0</span> ・ KILLS <span id="final-kills">0</span></div>
     <div class="game-subtitle" style="color: #fc6;">BEST <span id="best-score">0</span></div>
+    <div class="game-subtitle" id="run-stats" style="color: #9db; font-size: 13px;">MAX COMBO ×0 ・ GRAZE 0</div>
     <div id="new-record" style="display: none;">NEW RECORD!</div>
     <div id="ranking-box" style="display: none;">
         <div class="rank-title">RANKING — TOP 5</div>
@@ -99,6 +103,9 @@
 
 <!-- チャレンジモードの残り時間 -->
 <div id="challenge-time" style="display: none;">2:00</div>
+
+<!-- フリーフライト中のタイトル復帰ボタン -->
+<div id="free-exit" style="display: none;">EXIT</div>
 
 <!-- ヘルプ / 一時停止ボタン -->
 <div id="help-btn">？</div>

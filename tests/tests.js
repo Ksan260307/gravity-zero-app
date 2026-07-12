@@ -49,6 +49,9 @@ function runAll() {
         for (let k = 0; k < n; k++) {
             g.spawnTimer = 1e9;
             if (!allowBoss && !g.boss.active) g.nextBossScore = Number.MAX_SAFE_INTEGER;
+            // 隕石(破壊可能)が弾やビームを偶発的に吸わないよう横へ退避させる
+            // (隕石まわりの挙動は専用テストで直接 g.update を使って検証する)
+            g.debris.forEach(r => { r.position.x = 3000; });
             g.update(1 / 60);
         }
     };
@@ -96,7 +99,8 @@ function runAll() {
         check('window.game が生成されている', !!g);
         check('window.ZMF が公開されている', !!Z);
         check('機体モードは3種類', M.length === 3, `実際: ${M.length}`);
-        check('サブ武器は3種類', Object.keys(Z.SUB_WEAPONS).length === 3);
+        check('サブ武器は4種類', Object.keys(Z.SUB_WEAPONS).length === 4,
+            `実際: ${Object.keys(Z.SUB_WEAPONS).length}`);
         check('主要メソッドが存在する',
             typeof g.reset === 'function' && typeof g.damagePlayer === 'function' &&
             typeof g.equipSubWeapon === 'function' && typeof g.openHelp === 'function');
@@ -357,9 +361,18 @@ function runAll() {
             step(1);
         }
         check('HP0でゲームオーバーになる', g.state === 'gameover', `state=${g.state}`);
-        check('ゲームオーバー画面が表示される', document.getElementById('gameover-overlay').style.display === 'flex');
+        check('リザルトは爆発が終わるまで出ない',
+            document.getElementById('gameover-overlay').style.display === 'none');
         check('自機が非表示になる', g.player.group.visible === false);
         check('ヘルプボタンが隠れる', document.getElementById('help-btn').style.display === 'none');
+        // 爆発シーケンス+余韻を完走させるとリザルトが表示される
+        let goFrames = 0;
+        while ((g.playerDeathTimer > 0 || g.resultDelay > 0) && goFrames < 200) {
+            g.update(1 / 60);
+            goFrames++;
+        }
+        check('爆発後にリザルトが表示される',
+            document.getElementById('gameover-overlay').style.display === 'flex', `frames=${goFrames}`);
     });
 
     // =========================================================
@@ -493,10 +506,10 @@ function runAll() {
 
         g.reset(); setMode(1);
         placeBossShot(0, 0, 0);
-        g.player.blinkCooldown = C.BLINK_COOLDOWN; // ゼロシフト直後の無敵
+        g.player.blinkInvincible = C.BLINK_INVINCIBLE; // ゼロシフト直後の短い無敵
         step(1);
         check('無敵中(ゼロシフト直後)はボス弾を受けない', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
-        g.player.blinkCooldown = 0;
+        g.player.blinkInvincible = 0;
     });
 
     // =========================================================
@@ -744,7 +757,7 @@ function runAll() {
         }
         check('約1.5秒(90フレーム)で爆散する', frames >= 85 && frames <= 100, `frames=${frames}`);
         check('本体が消えて衝撃波リングが広がる',
-            !g.boss.mesh.visible && g.shockwaveLife > 0 && g.shockwave.visible);
+            !g.boss.mesh.visible && g.shockwaves.some(s => s.life > 0 && s.mesh.visible));
         check('大爆発で強い画面揺れが入る', g.shakeIntensity > 1.0, `shake=${g.shakeIntensity.toFixed(2)}`);
         g.reset();
     });
@@ -1241,6 +1254,614 @@ function runAll() {
         check('壁の反発が穏やか(強く弾き返されない)',
             g.player.vel.x < 0 && Math.abs(g.player.vel.x) <= 200 * 0.3,
             `vx=${g.player.vel.x.toFixed(0)}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('サブ武器: グラビティウェル(重力球)', () => {
+        check('4種目としてドロップ対象に含まれる', Z.ITEM_TYPES.includes('gravity'));
+
+        g.reset();
+        g.equipSubWeapon('gravity');
+        check('装備できる', g.player.subWeapon === 'gravity');
+        check('HUDに GRAVITY WELL と表示される',
+            document.getElementById('sub-name').innerText === 'GRAVITY WELL');
+
+        g.input.sub = true;
+        step(1);
+        g.input.sub = false;
+        check('発射で重力球が出現する', g.well.active === true && g.wellGroup.visible === true);
+        check('クールタイムは約8秒', approx(g.player.subCooldown, 8, 0.1),
+            `CT=${g.player.subCooldown.toFixed(1)}`);
+
+        // 前進して停留点に固定される
+        let n = 0;
+        while (!g.well.anchored && n < 300) { step(1); n++; }
+        check('前方の停留点まで進んで固定される',
+            g.well.anchored && approx(g.well.pos.z, C.WELL_ANCHOR_Z, 1),
+            `z=${g.well.pos.z.toFixed(0)} frames=${n}`);
+
+        // 吸引:自機を右に置き、ホーミングと逆方向(重力球側)へ引かれることを確認
+        g.player.pos.x = 200;
+        const e = spawnEnemy(150, 0, C.WELL_ANCHOR_Z);
+        step(10);
+        check('停留中は周囲の敵を吸い寄せる', e.vel.x < 0, `vx=${e.vel.x.toFixed(0)}`);
+        e.active = false; e.mesh.visible = false;
+        g.player.pos.x = 0;
+
+        // 中心部の継続ダメージで撃破できる(撃破スコアも入る)
+        const s0 = g.score;
+        const e2 = spawnEnemy(g.well.pos.x, g.well.pos.y, C.WELL_ANCHOR_Z, 1);
+        step(20);
+        check('中心部の継続ダメージで撃破できる', !e2.active, `hp=${e2.hp.toFixed(1)}`);
+        check('撃破スコア・コンボの対象になる', g.score > s0, `+${g.score - s0}`);
+
+        // 敵弾を飲み込む
+        placeBossShot(g.well.pos.x + 50, g.well.pos.y, C.WELL_ANCHOR_Z);
+        step(1);
+        check('敵弾を飲み込んで消す', countActive(g.enemyShots) === 0,
+            `shots=${countActive(g.enemyShots)}`);
+
+        // ボスには効かない
+        g.spawnBoss();
+        g.boss.mesh.position.set(g.well.pos.x, g.well.pos.y, C.WELL_ANCHOR_Z);
+        const bossHp = g.boss.hp;
+        step(5);
+        check('ボスには効かない(吸引もダメージもなし)', g.boss.hp === bossHp,
+            `${bossHp}→${g.boss.hp}`);
+        g.boss.active = false; g.boss.mesh.visible = false;
+        document.getElementById('boss-bar-wrap').style.display = 'none';
+
+        // 時間切れで弾けて消え、クールタイム明けに再射出できる
+        g.well.life = 0.02;
+        step(3);
+        check('時間切れで弾けて消える', !g.well.active && !g.wellGroup.visible);
+        g.player.subCooldown = 0;
+        g.input.sub = true;
+        step(1);
+        g.input.sub = false;
+        check('クールタイム明けに再射出できる', g.well.active === true);
+
+        g.reset();
+        check('リスタートで重力球も消える', !g.well.active && !g.wellGroup.visible);
+    });
+
+    // =========================================================
+    group('ウィスプの照準強化(敵を狙って撃つ)', () => {
+        g.reset();
+        g.wispCount = 1;
+        g.wispFireTimer = 0.5; // 初弾を遅らせて、まず定位置へ付かせる
+        step(10);
+        g.bullets.forEachActive(b => { b.active = false; b.mesh.visible = false; });
+
+        // 斜め前方の敵を狙って撃つ
+        const e = spawnEnemy(250, 0, -400, 999);
+        g.wispFireTimer = 0;
+        step(1);
+        let aimed = false;
+        g.bullets.forEachActive(b => { if (b.vel.x > 100) aimed = true; });
+        check('近くの敵を狙って撃つ(横方向へ偏向)', aimed);
+        e.active = false; e.mesh.visible = false;
+        g.bullets.forEachActive(b => { b.active = false; b.mesh.visible = false; });
+
+        // 敵がいなければまっすぐ前へ
+        g.wispFireTimer = 0;
+        step(1);
+        let straight = false;
+        g.bullets.forEachActive(b => { if (b.vel.x === 0 && b.vel.z <= -800) straight = true; });
+        check('敵がいなければ前方へ撃つ', straight);
+        g.reset();
+    });
+
+    // =========================================================
+    group('全体レビュー修正: チャレンジ後のタイトル復帰', () => {
+        g.gameMode = 'challenge';
+        g.reset();
+        check('チャレンジ中は残り時間が見える',
+            document.getElementById('challenge-time').style.display !== 'none');
+        g.gameOver();
+        g.backToTitle();
+        check('タイトルへ戻ると残り時間表示が消える',
+            document.getElementById('challenge-time').style.display === 'none');
+        check('モードは通常へ戻る(タイトルで選び直す)', g.gameMode === 'normal');
+        document.querySelector('#start-overlay .start-btn').click();
+        check('タイトルから通常モードで再開できる', g.state === 'playing');
+    });
+
+    // =========================================================
+    group('全体レビュー修正: 誤タップ即リスタート防止', () => {
+        g.gameMode = 'normal';
+        g.reset();
+        g.gameOver();
+        document.getElementById('gameover-overlay').click();
+        check('表示直後のタップでは再開しない', g.state === 'gameover', `state=${g.state}`);
+        g.gameOverTime = performance.now() - 1000;
+        document.getElementById('gameover-overlay').click();
+        check('間を置いたタップで再開する', g.state === 'playing', `state=${g.state}`);
+    });
+
+    // =========================================================
+    group('リザルト統計(最大コンボ・グレイズ回数)', () => {
+        g.gameMode = 'normal';
+        g.reset();
+        withRandom(0.99, () => {
+            g.destroyEnemy(spawnEnemy(0, 0, -300, 1));
+            g.destroyEnemy(spawnEnemy(0, 0, -300, 1));
+            g.destroyEnemy(spawnEnemy(0, 0, -300, 1));
+        });
+        check('最大コンボを記録する', g.maxCombo === 3, `max=${g.maxCombo}`);
+
+        setMode(1);
+        g.player.hitInvincible = 0;
+        g.damagePlayer(10);
+        withRandom(0.99, () => g.destroyEnemy(spawnEnemy(0, 0, -300, 1)));
+        check('被弾後も最大値は保持される', g.maxCombo === 3 && g.combo === 1,
+            `max=${g.maxCombo} combo=${g.combo}`);
+
+        const ge = spawnEnemy(40, 0, 0);
+        ge.grazed = false;
+        step(1);
+        check('グレイズ回数を記録する', g.grazeCount === 1, `graze=${g.grazeCount}`);
+        ge.active = false; ge.mesh.visible = false;
+
+        g.gameOver();
+        const stats = document.getElementById('run-stats').innerText;
+        check('リザルトに統計が表示される', stats.includes('×3') && stats.includes('GRAZE 1'), stats);
+
+        g.reset();
+        check('リスタートで統計が初期化される', g.maxCombo === 0 && g.grazeCount === 0);
+    });
+
+    // =========================================================
+    group('全体レビュー修正: 一時停止中のBGM予約防止', () => {
+        const a = g.audio;
+        if (!a.isInitialized) {
+            check('(音声が未初期化のため検証をスキップ)', true);
+            return;
+        }
+        const before = a.lastArpTime;
+        const t = before + 500;
+        a.updateBGM(t);
+        if (a.ctx.state === 'running') {
+            check('再生中はアルペジオが進む', a.lastArpTime === t, `state=${a.ctx.state}`);
+        } else {
+            check('停止中はBGMノードを予約しない(再開時の一斉再生防止)',
+                a.lastArpTime === before, `state=${a.ctx.state}`);
+        }
+    });
+
+    // =========================================================
+    group('グラフィック強化(遠景・グロー・ライティング)', () => {
+        g.reset();
+
+        // 遠景:星雲の背景球とガス惑星
+        check('星雲の背景球がある', !!g.nebula && !!g.nebula.material.map);
+        check('遠景の惑星と大気グローがある', !!g.planet && g.planet.children.length >= 1);
+        const r0 = g.nebula.rotation.y;
+        const p0 = g.planet.rotation.y;
+        step(30);
+        check('星雲と惑星がゆっくり動く(生きた宇宙)',
+            g.nebula.rotation.y !== r0 && g.planet.rotation.y !== p0);
+
+        // グロー(擬似ブルーム)
+        check('グロー用テクスチャが生成されている', !!g.glowTexture && g.glowTexture.isTexture === true);
+        check('テクスチャはsRGB指定(明るく化けない)',
+            g.glowTexture.colorSpace === 'srgb' && g.nebula.material.map.colorSpace === 'srgb',
+            `glow=${g.glowTexture.colorSpace} nebula=${g.nebula.material.map.colorSpace}`);
+        check('自機にエンジングローが付く', !!g.player.engineGlow && g.player.engineGlow.isSprite === true);
+
+        const e = g.spawnEnemyUnit('rush');
+        check('敵に発光ハローが付く', !!e.glow && e.mesh.children.includes(e.glow));
+        check('ハローの色は敵の色と揃う', '#' + e.glow.material.color.getHexString() === e.colorHex,
+            `glow=#${e.glow.material.color.getHexString()} enemy=${e.colorHex}`);
+        e.active = false; e.mesh.visible = false;
+
+        g.spawnItem({ x: 0, y: 0, z: -500 }, 'repair');
+        const itm = g.items.pool.find(i => i.active);
+        check('アイテムに種類色のハローが付く',
+            !!itm.glow && itm.glow.material.color.getHexString() === '66ff88',
+            `color=#${itm.glow && itm.glow.material.color.getHexString()}`);
+        itm.active = false; itm.group.visible = false;
+
+        check('ウィスプにもグローが付く', g.wisps[0].children.length >= 1);
+        check('ボスに威圧感のあるハローが付く', g.boss.mesh.children.some(c => c.isSprite === true));
+
+        // ライティング
+        check('半球ライトで陰影に色が付く', !!g.hemiLight && g.hemiLight.isHemisphereLight === true);
+        g.player.pos.set(123, 45, 0);
+        step(1);
+        check('自機追従ライトが機体を照らす',
+            g.playerLight.position.x === 123 && g.playerLight.position.y === 45 + 12,
+            `light=(${g.playerLight.position.x}, ${g.playerLight.position.y})`);
+        g.player.pos.set(0, 0, 0);
+
+        // 岩塊の色数と遠景の明るい星
+        check('岩塊に複数の色味がある',
+            new Set(g.debris.map(r => r.material.color.getHex())).size >= 2);
+        check('遠景に色付きの明るい星がある', !!g.brightStars);
+
+        // ビネット
+        g.drawOverlay();
+        check('ビネットが描画される', !!g._vignette);
+        g.reset();
+    });
+
+    // =========================================================
+    group('自機と敵のグラフィック強化', () => {
+        g.reset();
+
+        // 自機のディテール
+        check('翼端灯が左右にある', Array.isArray(g.player.tipGlows) && g.player.tipGlows.length === 2 &&
+            g.player.tipGlows.every(s => s.isSprite === true));
+        check('機首の発光チップがある', !!g.player.noseGlow && g.player.noseGlow.isSprite === true);
+        check('サイドスラスター(バーニア)が左右にある', !!g.player.vernierL && !!g.player.vernierR);
+
+        // バーニアは移動の反対側が噴く
+        g.input.x = 1; g.input.y = 0;
+        step(1);
+        check('右移動で左バーニアが噴く',
+            g.player.vernierL.material.opacity > 0.5 && g.player.vernierR.material.opacity === 0,
+            `L=${g.player.vernierL.material.opacity.toFixed(2)} R=${g.player.vernierR.material.opacity.toFixed(2)}`);
+        g.input.x = -1;
+        step(1);
+        check('左移動で右バーニアが噴く',
+            g.player.vernierR.material.opacity > 0.5 && g.player.vernierL.material.opacity === 0);
+        g.input.x = 0;
+        step(1);
+
+        // モード色の反映
+        setMode(0);
+        check('翼端灯と機首チップはモード色に染まる',
+            '#' + g.player.tipGlows[0].material.color.getHexString() === M[0].color &&
+            '#' + g.player.noseGlow.material.color.getHexString() === M[0].color,
+            `tip=#${g.player.tipGlows[0].material.color.getHexString()}`);
+        setMode(1);
+
+        // 敵は種類ごとにシルエットが違う
+        const r = g.spawnEnemyUnit('rush');
+        const wv = g.spawnEnemyUnit('weave');
+        const gn = g.spawnEnemyUnit('gunner');
+        check('突撃・蛇行・砲撃で形状が異なる',
+            r.mesh.geometry !== wv.mesh.geometry && wv.mesh.geometry !== gn.mesh.geometry &&
+            r.mesh.geometry !== gn.mesh.geometry);
+        check('敵にネオン輪郭線が付く', !!r.edge && r.mesh.children.includes(r.edge));
+        check('輪郭線の色は機体色と揃う', '#' + r.edge.material.color.getHexString() === r.colorHex,
+            `edge=#${r.edge.material.color.getHexString()} enemy=${r.colorHex}`);
+        check('輪郭線も種類ごとに切り替わる', r.edge.geometry !== gn.edge.geometry);
+        [r, wv, gn].forEach(e => { e.active = false; e.mesh.visible = false; });
+
+        // ボスの強化
+        check('ボスにネオン輪郭線がある', !!g.bossEdges && g.bossEdges.isLineSegments === true);
+        check('ボスに逆回転の第二リングがある', !!g.bossRing2);
+        g.reset();
+    });
+
+    // =========================================================
+    group('自機の爆発シーケンス(HP0で爆散)', () => {
+        g.gameMode = 'normal';
+        g.reset(); setMode(1);
+        g.hp = 10;
+        g.player.hitInvincible = 0;
+        g.damagePlayer(25);
+        check('HP0でゲームオーバーになる', g.state === 'gameover', `state=${g.state}`);
+        check('爆発シーケンスが始まる', g.playerDeathTimer > 0, `t=${g.playerDeathTimer}`);
+        check('機体が消える', g.player.group.visible === false);
+
+        let frames = 0;
+        while (g.playerDeathTimer > 0 && frames < 120) { g.update(1 / 60); frames++; }
+        check('約0.9秒かけて連鎖爆発する', frames >= 50 && frames <= 60, `frames=${frames}`);
+        check('最後に大爆発の衝撃波が広がる', g.shockwaves.some(s => s.life > 0 && s.mesh.visible));
+        check('強い画面揺れが入る', g.shakeIntensity > 1.0, `shake=${g.shakeIntensity.toFixed(2)}`);
+
+        // リザルトは大爆発の余韻(約0.5秒)を見せてから表示される
+        check('大爆発直後はまだリザルトが出ない',
+            document.getElementById('gameover-overlay').style.display === 'none');
+        let extra = 0;
+        while (g.resultDelay > 0 && extra < 60) { g.update(1 / 60); extra++; }
+        check('余韻の後にリザルトが表示される',
+            document.getElementById('gameover-overlay').style.display === 'flex' && extra >= 25,
+            `extra=${extra}`);
+
+        g.reset();
+        check('リスタートでシーケンスも止まる', g.playerDeathTimer === 0 && g.resultDelay === 0);
+
+        // チャレンジの時間切れ(機体は無事)では爆発しない
+        g.gameMode = 'challenge';
+        g.reset();
+        g.gameOver();
+        check('チャレンジの時間切れでは爆発しない',
+            g.playerDeathTimer <= 0 && g.player.group.visible === true);
+        g.gameMode = 'normal';
+        g.reset();
+    });
+
+    // =========================================================
+    group('隕石の破壊(ショット・サブ武器/ロックオン対象外)', () => {
+        g.reset(); setMode(1);
+        check('隕石に耐久が設定されている',
+            g.debris.every(r => r.userData.hp >= 1 && r.userData.size > 0));
+
+        // 通常弾で破壊 → 景観が途切れないよう奥へ再配置される
+        const rock = g.debris[0];
+        rock.position.set(0, 0, -300);
+        rock.userData.hp = 1;
+        placeBullet(0, 0, -300);
+        g.spawnTimer = 1e9;
+        g.nextBossScore = Number.MAX_SAFE_INTEGER;
+        g.update(1 / 60);
+        check('通常弾で破壊できる(奥へ再配置)', rock.position.z < -1000, `z=${rock.position.z.toFixed(0)}`);
+        check('弾は消費される', countActive(g.bullets) === 0, `弾=${countActive(g.bullets)}`);
+        check('耐久が再設定される(景観は尽きない)', rock.userData.hp >= 1);
+
+        // 誘導弾(サブ武器)でも破壊できる
+        rock.position.set(50, 0, -300);
+        rock.userData.hp = 1;
+        g.launchProjectile(g.comets, 50, 0, -300, 0, 0, 0, null, 0, 3, 3);
+        g.update(1 / 60);
+        check('コメットでも破壊できる', rock.position.z < -1000, `z=${rock.position.z.toFixed(0)}`);
+
+        // 照射ビームでも破壊できる
+        rock.position.set(0, 0, -300);
+        rock.userData.hp = 1;
+        g.equipSubWeapon('halberd');
+        g.input.sub = true;
+        for (let i = 0; i < 20; i++) { g.spawnTimer = 1e9; g.update(1 / 60); }
+        g.input.sub = false;
+        check('照射ビームでも破壊できる', rock.position.z < -1000, `z=${rock.position.z.toFixed(0)}`);
+
+        // ロックオンの対象にはならない
+        g.reset();
+        rock.position.set(0, 0, -300);
+        rock.userData.hp = 5;
+        g.input.lock = true;
+        for (let i = 0; i < 30; i++) {
+            g.spawnTimer = 1e9;
+            g.nextBossScore = Number.MAX_SAFE_INTEGER;
+            g.update(1 / 60);
+        }
+        check('ロックオンの対象にならない', g.player.lockedTargets.length === 0,
+            `locks=${g.player.lockedTargets.length}`);
+        g.input.lock = false;
+        step(1);
+        g.reset();
+    });
+
+    // =========================================================
+    group('フリーフライトモード(敵なしの練習)', () => {
+        check('タイトルに FREE FLIGHT ボタンがある', !!document.getElementById('free-btn'));
+
+        g.backToTitle();
+        document.getElementById('free-btn').click();
+        check('フリーフライトで開始できる', g.state === 'playing' && g.gameMode === 'free',
+            `state=${g.state} mode=${g.gameMode}`);
+        check('EXITボタンが表示される', document.getElementById('free-exit').style.display !== 'none');
+
+        // 敵が湧かない
+        for (let i = 0; i < 10; i++) { g.spawnTimer = 0; g.update(1 / 60); }
+        check('敵が出現しない', countActive(g.enemies) === 0, `敵=${countActive(g.enemies)}`);
+
+        // スコアが基準を超えてもボスが出ない
+        g.addScore(C.BOSS_FIRST_SCORE + 500);
+        for (let i = 0; i < 3; i++) g.update(1 / 60);
+        check('ボスも出現しない', !g.boss.active);
+
+        // 武器は使える(隕石撃ちの練習ができる)
+        g.lastFireTime = 0;
+        g.input.fire = true;
+        step(1);
+        g.input.fire = false;
+        check('ショットは撃てる', countActive(g.bullets) >= 1, `弾=${countActive(g.bullets)}`);
+
+        // EXITでタイトルへ戻る
+        document.getElementById('free-exit').click();
+        check('EXITでタイトルへ戻る', g.state === 'title' && g.gameMode === 'normal');
+        check('EXITボタンが消える', document.getElementById('free-exit').style.display === 'none');
+        document.querySelector('#start-overlay .start-btn').click();
+        check('通常モードでは EXIT が出ない', document.getElementById('free-exit').style.display === 'none');
+    });
+
+    // =========================================================
+    group('機体速度の引き上げ', () => {
+        check('全モードの推力が引き上げられている(400/325/240)',
+            M[0].force === 400 && M[1].force === 325 && M[2].force === 240,
+            `${M[0].force}/${M[1].force}/${M[2].force}`);
+
+        // 標準モードで4秒加速:旧仕様(推力290)なら約500止まりの時点で550を超える
+        g.reset(); setMode(1);
+        g.input.x = 1;
+        for (let i = 0; i < 240; i++) {
+            g.player.pos.x = 0; // 壁に当たらないよう位置だけ戻して速度を伸ばす
+            step(1);
+        }
+        check('標準モードの到達速度が上がっている', g.player.vel.x > 550,
+            `vx=${g.player.vel.x.toFixed(0)}`);
+        g.input.x = 0;
+        g.reset();
+    });
+
+    // =========================================================
+    group('フリーフライトの無敵', () => {
+        g.backToTitle();
+        document.getElementById('free-btn').click();
+        g.player.hitInvincible = 0;
+        g.damagePlayer(50);
+        check('フリーフライト中はダメージ無効', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        document.getElementById('free-exit').click();
+        document.querySelector('#start-overlay .start-btn').click();
+        check('通常モードでは今まで通り被弾する', (() => {
+            g.player.hitInvincible = 0;
+            setMode(1);
+            g.damagePlayer(10);
+            return g.hp === C.PLAYER_MAX_HP - 10;
+        })(), `hp=${g.hp}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('ポーズからタイトルへ戻る', () => {
+        g.gameMode = 'normal';
+        g.reset();
+        g.openHelp();
+        check('ヘルプで一時停止する', g.state === 'paused');
+        document.getElementById('help-to-title').click();
+        check('ヘルプからタイトルへ戻れる', g.state === 'title' &&
+            document.getElementById('help-overlay').style.display === 'none' &&
+            document.getElementById('start-overlay').style.display === 'flex');
+        check('helpOpen フラグが下りる', g.helpOpen === false);
+        document.querySelector('#start-overlay .start-btn').click();
+        check('タイトルから再開できる', g.state === 'playing');
+    });
+
+    // =========================================================
+    group('ボスの放射攻撃(レベル4以降)', () => {
+        g.reset();
+        g.spawnBoss();
+        g.level = 5;
+        g.bossRadialTimer = 0.01;
+        step(2, true);
+        check('12方向の放射弾を撃つ', countActive(g.enemyShots) >= 12,
+            `shots=${countActive(g.enemyShots)}`);
+        let lateral = 0;
+        g.enemyShots.forEachActive(s => { if (Math.hypot(s.vel.x, s.vel.y) > 100) lateral++; });
+        check('弾は放射状に広がる', lateral >= 12, `lateral=${lateral}`);
+
+        // 低レベルでは放射攻撃しない
+        g.reset();
+        g.spawnBoss();
+        g.level = 1;
+        g.bossRadialTimer = 0.01;
+        step(2, true);
+        check('低レベルでは放射攻撃しない', countActive(g.enemyShots) < 12,
+            `shots=${countActive(g.enemyShots)}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('修正: ゼロシフト無敵の分離(連打常時無敵の防止)', () => {
+        check('無敵時間はクールダウンより短い独立タイマー',
+            C.BLINK_INVINCIBLE < C.BLINK_COOLDOWN && C.BLINK_INVINCIBLE <= 0.2,
+            `inv=${C.BLINK_INVINCIBLE} cd=${C.BLINK_COOLDOWN}`);
+
+        // 押しっぱなしでも無敵率は25%程度に留まる(旧仕様は100%)
+        g.reset();
+        let invFrames = 0;
+        for (let i = 0; i < 300; i++) {
+            g.input.blink = true;
+            g.input.x = 1;
+            step(1);
+            if (g.player.blinkInvincible > 0) invFrames++;
+        }
+        check('連打しても常時無敵にならない', invFrames / 300 < 0.5,
+            `無敵率=${Math.round(invFrames / 300 * 100)}%`);
+        g.input.x = 0;
+
+        // クールダウン中でも、無敵が切れた後は被弾する
+        g.reset(); setMode(1);
+        g.input.x = 1;
+        g.input.blink = true;
+        step(1);
+        g.input.x = 0;
+        check('使用直後は短い無敵がある', g.player.blinkInvincible > 0,
+            `inv=${g.player.blinkInvincible.toFixed(2)}`);
+        while (g.player.blinkInvincible > 0) step(1);
+        check('無敵が切れてもクールダウンは残っている', g.player.blinkCooldown > 0,
+            `cd=${g.player.blinkCooldown.toFixed(2)}`);
+        g.player.hitInvincible = 0;
+        spawnEnemy(g.player.pos.x, g.player.pos.y, 0);
+        step(1);
+        check('クールダウン中でも無敵切れ後は被弾する', g.hp < C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        g.reset();
+    });
+
+    // =========================================================
+    group('修正: ボスにも接触ダメージ', () => {
+        g.gameMode = 'normal';
+        g.reset(); setMode(1);
+        g.spawnBoss();
+        g.boss.mesh.position.copy(g.player.pos);
+        g.player.hitInvincible = 0;
+        step(1, true);
+        check('ボスに接触すると被弾する', g.hp === C.PLAYER_MAX_HP - C.COLLISION_DAMAGE, `hp=${g.hp}`);
+        check('ボスは接触しても消えない', g.boss.active === true);
+        step(1, true);
+        check('被弾直後の無敵で連続ヒットしない', g.hp === C.PLAYER_MAX_HP - C.COLLISION_DAMAGE,
+            `hp=${g.hp}`);
+
+        // チャレンジではすり抜け
+        g.gameMode = 'challenge';
+        g.reset();
+        g.spawnBoss();
+        g.boss.mesh.position.copy(g.player.pos);
+        step(1, true);
+        check('チャレンジ中はボスもすり抜ける', g.hp === C.PLAYER_MAX_HP, `hp=${g.hp}`);
+        g.gameMode = 'normal';
+        g.reset();
+    });
+
+    // =========================================================
+    group('修正: 隕石の状態リセット', () => {
+        g.reset();
+        const rock = g.debris[0];
+        rock.userData.hp = 0.5;
+        rock.position.set(999, 999, 999);
+        g.reset();
+        check('リセットで耐久が回復する', rock.userData.hp >= 1, `hp=${rock.userData.hp}`);
+        check('リセットで通常領域(奥)へ戻る',
+            Math.abs(rock.position.x) <= 600 && rock.position.z <= -1200,
+            `pos=(${rock.position.x.toFixed(0)}, ${rock.position.z.toFixed(0)})`);
+    });
+
+    // =========================================================
+    group('修正: 衝撃波の多重発生(上書き解消)', () => {
+        g.reset();
+        check('衝撃波はプール化されている', Array.isArray(g.shockwaves) && g.shockwaves.length >= 2,
+            `n=${g.shockwaves && g.shockwaves.length}`);
+        g.triggerShockwave(-100, 0, -300);
+        g.triggerShockwave(120, 40, -500);
+        const act = g.shockwaves.filter(s => s.life > 0);
+        check('2つ同時に発生しても消し合わない', act.length === 2, `active=${act.length}`);
+        check('それぞれ別の位置で広がる', new Set(act.map(s => s.mesh.position.x)).size === 2);
+        step(120);
+        check('時間経過で両方消える', g.shockwaves.every(s => s.life <= 0 && !s.mesh.visible));
+        g.reset();
+    });
+
+    // =========================================================
+    group('修正: 蛇行敵にも重力球の吸引が効く', () => {
+        g.reset();
+        g.equipSubWeapon('gravity');
+        g.input.sub = true;
+        step(1);
+        g.input.sub = false;
+        let n = 0;
+        while (!g.well.anchored && n < 300) { step(1); n++; }
+
+        g.player.pos.x = 200; // ホーミング(steer)は+X方向へ働く状況にする
+        const wv = g.spawnEnemyUnit('weave');
+        wv.mesh.position.set(150, 0, C.WELL_ANCHOR_Z);
+        wv.vel.set(0, 0, 0);
+        wv.wavePhase = 0; // 蛇行の上書きも+X方向へ振れる位相
+        wv.grazed = true;
+        step(10);
+        check('蛇行が吸引を打ち消さない(重力球側へ引かれる)', wv.vel.x < 0,
+            `vx=${wv.vel.x.toFixed(0)}`);
+        wv.active = false; wv.mesh.visible = false;
+        g.player.pos.x = 0;
+        g.reset();
+    });
+
+    // =========================================================
+    group('修正: 敵弾プールの増量', () => {
+        check('敵弾プールが48発へ拡張されている', g.enemyShots.pool.length === 48,
+            `n=${g.enemyShots.pool.length}`);
+        g.reset();
+        g.spawnBoss();
+        g.level = 5;
+        g.bossFireTimer = 0.01;
+        g.bossRadialTimer = 0.01;
+        step(2, true);
+        check('3方向+12方向の同時発射でも弾が欠けない', countActive(g.enemyShots) === 15,
+            `shots=${countActive(g.enemyShots)}`);
         g.reset();
     });
 
